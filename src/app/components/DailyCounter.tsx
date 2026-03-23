@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import type { FlexIndex } from '@/types';
+import { useSSE } from '@/app/hooks/useSSE';
 
 interface DailyCounterProps {
   industryId: string;
@@ -36,6 +37,18 @@ export default function DailyCounter({ industryId, indices, eventLimit }: DailyC
   const [byIndex, setByIndex] = useState<Record<string, number>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  // ── SSE — receive initial snapshot + live counter updates ────────────
+  const sseUrl = `/api/stream?industryId=${industryId}&types=counters`;
+
+  useSSE(sseUrl, ['counters'], (_, rawData) => {
+    const data = rawData as { byIndex?: Record<string, number> };
+    if (data.byIndex) {
+      setByIndex(data.byIndex);
+      setLastUpdated(new Date());
+    }
+  });
+
+  // ── Manual refresh (one-time REST fetch) ─────────────────────────────
   const fetchCounters = useCallback(async () => {
     try {
       const res = await fetch(`/api/scheduler/status?industryId=${industryId}`);
@@ -47,15 +60,9 @@ export default function DailyCounter({ industryId, indices, eventLimit }: DailyC
         }
       }
     } catch {
-      // ignore
+      /* ignore */
     }
   }, [industryId]);
-
-  useEffect(() => {
-    fetchCounters();
-    const interval = setInterval(fetchCounters, 30_000);
-    return () => clearInterval(interval);
-  }, [fetchCounters]);
 
   const totalEvents = Object.values(byIndex).reduce((s, n) => s + n, 0);
   const totalLimit = eventLimit * Math.max(indices.length, 1);

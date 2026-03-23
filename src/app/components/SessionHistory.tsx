@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
+import { useSSE } from '@/app/hooks/useSSE';
 
 interface SessionRecord {
   id: string;
@@ -17,7 +18,7 @@ interface SessionRecord {
 
 interface SessionHistoryProps {
   industryId: string;
-  isActive?: boolean;  // true while a distribution run is in progress
+  isActive?: boolean; // true while a distribution run is in progress (for LIVE badge)
 }
 
 function formatDuration(start: string, end: string): string {
@@ -35,6 +36,26 @@ export default function SessionHistory({ industryId, isActive = false }: Session
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  // ── SSE — receive initial snapshot + live session records ────────────
+  const sseUrl = `/api/stream?industryId=${industryId}&types=session`;
+
+  useSSE(sseUrl, ['session'], (_, rawData) => {
+    const data = rawData as {
+      session?: SessionRecord;
+      sessions?: SessionRecord[];
+      initial?: boolean;
+      cleared?: boolean;
+    };
+    if (data.initial || data.cleared) {
+      setSessions(data.sessions ?? []);
+    } else if (data.session) {
+      // Prepend newest session and cap at 200
+      setSessions((prev) => [data.session!, ...prev].slice(0, 200));
+    }
+    setLastUpdated(new Date());
+  });
+
+  // ── Manual refresh (one-time REST fetch) ─────────────────────────────
   const fetchSessions = useCallback(async () => {
     try {
       const res = await fetch(`/api/sessions?industryId=${industryId}&limit=50`);
@@ -44,16 +65,9 @@ export default function SessionHistory({ industryId, isActive = false }: Session
         setLastUpdated(new Date());
       }
     } catch {
-      // ignore
+      /* ignore */
     }
   }, [industryId]);
-
-  // Poll fast (2s) while a run is active, slow (15s) otherwise
-  useEffect(() => {
-    fetchSessions();
-    const interval = setInterval(fetchSessions, isActive ? 3_000 : 30_000);
-    return () => clearInterval(interval);
-  }, [fetchSessions, isActive]);
 
   const handleClear = async () => {
     setLoading(true);
@@ -68,7 +82,6 @@ export default function SessionHistory({ industryId, isActive = false }: Session
   const successCount = sessions.filter((s) => s.success).length;
   const totalEvents = sessions.reduce((s, r) => s + r.totalEventsCount, 0);
 
-  // Collect all unique index IDs across sessions (preserve order of appearance)
   const allIndexIds = Array.from(
     new Set(sessions.flatMap((s) => Object.keys(s.eventsByIndex ?? {})))
   );
@@ -88,11 +101,7 @@ export default function SessionHistory({ industryId, isActive = false }: Session
             )}
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            {sessions.length} sessions · {successCount} successful
-            {isActive
-              ? <span className="ml-2 text-amber-500">· refreshing every 3s</span>
-              : <span className="ml-2">· auto-refreshes every 30s</span>
-            }
+            {sessions.length} sessions · {successCount} successful · live via SSE
             {lastUpdated && <span className="ml-2">· updated {lastUpdated.toLocaleTimeString()}</span>}
           </p>
         </div>

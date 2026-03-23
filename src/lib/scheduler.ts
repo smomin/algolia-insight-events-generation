@@ -1,5 +1,6 @@
 import cron from 'node-cron';
 import type { Persona, SchedulerRun, IndustryV2, FlexIndex } from '@/types';
+import { emitToIndustry } from '@/lib/sse';
 import {
   resetCountersIfNewDay,
   getRemainingBudget,
@@ -42,6 +43,27 @@ function getState(industryId: string): IndustrySchedulerState {
     states.set(industryId, { task: null, currentRun: null, isDistributing: false, cancelRequested: false });
   }
   return states.get(industryId)!;
+}
+
+// ─────────────────────────────────────────────
+// SSE status helper
+// ─────────────────────────────────────────────
+
+/**
+ * Emit the current scheduler status for an industry to all connected SSE clients.
+ * Pass `lastRun` only when a run has just completed so clients can display it.
+ */
+function emitStatus(industryId: string, overrides: Record<string, unknown> = {}): void {
+  const state = getState(industryId);
+  emitToIndustry(industryId, 'status', {
+    isRunning: state.task !== null,
+    isDistributing: state.isDistributing,
+    cancelRequested: state.cancelRequested,
+    currentRun: state.currentRun
+      ? { sessionsCompleted: state.currentRun.sessionsCompleted, errors: state.currentRun.errors }
+      : null,
+    ...overrides,
+  });
 }
 
 // ─────────────────────────────────────────────
@@ -166,7 +188,8 @@ export async function runPersonaSession(
         selectedHit,
         persona,
         industry.claudePrompts.generateSecondaryQueries,
-        industry.id
+        industry.id,
+        secondaryIndices.map((si) => ({ id: si.id, label: si.label }))
       );
 
       for (const secIdx of secondaryIndices) {
@@ -333,6 +356,7 @@ export async function distributeSessionsForDay(
 
   state.isDistributing = true;
   await resetCountersIfNewDay(industry.id);
+  emitStatus(industry.id, { lastRun: null });
 
   // Calculate max sessions constrained by the index with least budget
   let maxSessions = Infinity;
@@ -363,6 +387,7 @@ export async function distributeSessionsForDay(
     state.currentRun = null;
     state.isDistributing = false;
     await setDistributionActive(industry.id, run.id, false);
+    emitStatus(industry.id, { lastRun: run });
     return run;
   }
 
@@ -412,6 +437,9 @@ export async function distributeSessionsForDay(
       }
     }
 
+    // Push progress update so SchedulerControls shows live session count
+    emitStatus(industry.id);
+
     await sleep(randomInt(500, 2000));
   }
 
@@ -422,6 +450,7 @@ export async function distributeSessionsForDay(
   state.cancelRequested = false;
   // Clear persisted active state so status is accurate after hot reload
   await setDistributionActive(industry.id, run.id, false);
+  emitStatus(industry.id, { lastRun: run });
 
   console.log(
     `[${industry.id}] Distribution complete — ` +
@@ -454,6 +483,7 @@ export function startScheduler(personas: Persona[], industry: IndustryV2): void 
   );
 
   console.log(`[Scheduler:${industry.id}] Started. Cron: "${cronExpr}" (${tz})`);
+  emitStatus(industry.id);
 }
 
 export function stopScheduler(industryId: string): void {
@@ -462,6 +492,7 @@ export function stopScheduler(industryId: string): void {
     state.task.stop();
     state.task = null;
     console.log(`[Scheduler:${industryId}] Stopped.`);
+    emitStatus(industryId);
   }
 }
 
@@ -472,6 +503,7 @@ export async function cancelDistribution(industryId: string): Promise<void> {
   state.cancelRequested = true;
   await setDistributionCancelRequested(industryId);
   console.log(`[Scheduler:${industryId}] Cancel requested (in-memory + persisted).`);
+  emitStatus(industryId);
 }
 
 export function isSchedulerRunning(industryId: string): boolean {

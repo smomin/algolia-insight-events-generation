@@ -1,4 +1,5 @@
 import { cbGet, cbUpsert, cbDelete, cbGetIndex, cbAddToIndex, cbRemoveFromIndex } from '@/lib/couchbase';
+import { emitToIndustry } from '@/lib/sse';
 import type {
   IndustryV2,
   IndustryCounters,
@@ -78,6 +79,7 @@ export async function incrementIndexCounter(
   const counters = await getTodayCounters(industryId);
   counters.byIndex[indexId] = (counters.byIndex[indexId] ?? 0) + amount;
   await cbUpsert('counters', industryId, counters);
+  emitToIndustry(industryId, 'counters', counters);
 }
 
 export async function getRemainingBudget(
@@ -102,6 +104,8 @@ export async function appendEventLog(
   const existing = doc?.events ?? [];
   const updated = [...existing, ...events].slice(-MAX_EVENT_LOG);
   await cbUpsert('eventLogs', industryId, { events: updated });
+  // Push only the newly-added batch; clients prepend these to their local list
+  emitToIndustry(industryId, 'event-log', { events });
 }
 
 export async function getEventLog(industryId: string): Promise<SentEvent[]> {
@@ -111,6 +115,7 @@ export async function getEventLog(industryId: string): Promise<SentEvent[]> {
 
 export async function clearEventLog(industryId: string): Promise<void> {
   await cbUpsert('eventLogs', industryId, { events: [] });
+  emitToIndustry(industryId, 'event-log', { events: [], cleared: true });
 }
 
 // ─────────────────────────────────────────────
@@ -149,6 +154,8 @@ export async function appendSession(
   const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', industryId);
   const sessions = [session, ...(doc?.sessions ?? [])].slice(0, MAX_SESSIONS);
   await cbUpsert('sessions', industryId, { sessions });
+  // Push only the single new record; clients prepend it to their local list
+  emitToIndustry(industryId, 'session', { session });
 }
 
 export async function getSessions(industryId: string): Promise<SessionRecord[]> {
@@ -158,6 +165,7 @@ export async function getSessions(industryId: string): Promise<SessionRecord[]> 
 
 export async function clearSessions(industryId: string): Promise<void> {
   await cbUpsert('sessions', industryId, { sessions: [] });
+  emitToIndustry(industryId, 'session', { sessions: [], cleared: true });
 }
 
 // ─────────────────────────────────────────────

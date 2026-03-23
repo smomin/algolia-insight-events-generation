@@ -13,6 +13,7 @@ import IndustrySwitcher, {
 } from './components/IndustrySwitcher';
 import IndustryEditor from './components/IndustryEditor';
 import AppConfigPanel from './components/AppConfigPanel';
+import { useSSE } from './hooks/useSSE';
 import type { Persona, IndustryV2 } from '@/types';
 
 // ─────────────────────────────────────────────
@@ -105,37 +106,28 @@ export default function Home() {
       });
   }, [activeIndustry, personasByIndustry]);
 
-  // ── Poll global scheduler status ──
-  // Only used for the header running-dots on non-active industries.
-  // The active industry's status is kept fresh by SchedulerControls.onStatusChange.
-  const pollStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/scheduler/status');
-      if (!res.ok) return;
-      const data = await res.json();
-      const all = data.all as Record<string, { isRunning: boolean; isDistributing: boolean }>;
-      if (all) {
-        const status: RunningStatus = {};
-        Object.entries(all).forEach(([id, s]) => {
-          status[id] = { isRunning: s.isRunning, isDistributing: s.isDistributing };
-        });
-        setRunningStatus(status);
-      }
-    } catch {
-      // ignore
+  // ── Global SSE stream — header running-dots for all industries ───────
+  // Receives { all: Record<id, {isRunning, isDistributing}> } on connect,
+  // then { industryId, isRunning, isDistributing } on each status change.
+  useSSE('/api/stream?industryId=_global&types=status', ['status'], (_, rawData) => {
+    const data = rawData as {
+      all?: Record<string, { isRunning: boolean; isDistributing: boolean }>;
+      industryId?: string;
+      isRunning?: boolean;
+      isDistributing?: boolean;
+    };
+    if (data.all) {
+      setRunningStatus(data.all);
+    } else if (data.industryId) {
+      setRunningStatus((prev) => ({
+        ...prev,
+        [data.industryId!]: {
+          isRunning: data.isRunning ?? false,
+          isDistributing: data.isDistributing ?? false,
+        },
+      }));
     }
-  }, []);
-
-  const anyRunningOrDistributing = Object.values(runningStatus).some(
-    (s) => s.isRunning || s.isDistributing
-  );
-
-  useEffect(() => {
-    pollStatus();
-    // Poll faster when something is active, very slow when everything is idle
-    const interval = setInterval(pollStatus, anyRunningOrDistributing ? 10_000 : 60_000);
-    return () => clearInterval(interval);
-  }, [pollStatus, anyRunningOrDistributing]);
+  });
 
   // ── Callbacks ──
   const handleSessionComplete = useCallback(
@@ -161,7 +153,7 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      await pollStatus();
+      // SSE global stream will push status updates for each industry as they start
     } finally {
       setRunningAllIndustries(false);
     }
@@ -173,7 +165,7 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ startAll: true }),
     });
-    await pollStatus();
+    // SSE will push the scheduler started status for each industry
   };
 
   const handleDeleteIndustry = async (id: string) => {
@@ -444,10 +436,7 @@ export default function Home() {
             )}
 
             {/* ── Event log ── */}
-            <EventLog
-              industryId={activeIndustry}
-              isActive={distributingIndustries[activeIndustry] ?? false}
-            />
+            <EventLog industryId={activeIndustry} />
           </>
         )}
 

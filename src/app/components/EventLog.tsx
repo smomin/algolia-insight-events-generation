@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import type { SentEvent } from '@/types';
+import { useSSE } from '@/app/hooks/useSSE';
 
 interface EventLogProps {
   industryId: string;
-  isActive?: boolean;
 }
 
 const EVENT_TYPE_STYLE: Record<string, string> = {
@@ -65,11 +65,33 @@ function EventRow({ event: sentEvent }: { event: SentEvent }) {
   );
 }
 
-export default function EventLog({ industryId, isActive = false }: EventLogProps) {
+export default function EventLog({ industryId }: EventLogProps) {
   const [events, setEvents] = useState<SentEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
+  // ── SSE — receive initial snapshot + live event batches ──────────────
+  const sseUrl = `/api/stream?industryId=${industryId}&types=event-log`;
+
+  useSSE(sseUrl, ['event-log'], (_, rawData) => {
+    const data = rawData as {
+      events: SentEvent[];
+      initial?: boolean;
+      cleared?: boolean;
+    };
+    if (data.initial || data.cleared) {
+      // Full list (initial snapshot or after clear)
+      setEvents(data.events ?? []);
+    } else {
+      // New batch — prepend in reverse (newest first) and cap at 500
+      setEvents((prev) =>
+        [...(data.events ?? []).slice().reverse(), ...prev].slice(0, 500)
+      );
+    }
+    setLastUpdated(new Date());
+  });
+
+  // ── Manual refresh (one-time REST fetch) ─────────────────────────────
   const fetchLog = useCallback(async () => {
     try {
       const res = await fetch(`/api/event-log?industryId=${industryId}`);
@@ -79,23 +101,15 @@ export default function EventLog({ industryId, isActive = false }: EventLogProps
         setLastUpdated(new Date());
       }
     } catch {
-      // ignore
+      /* ignore */
     }
   }, [industryId]);
-
-  useEffect(() => {
-    fetchLog();
-    const interval = setInterval(fetchLog, isActive ? 4_000 : 30_000);
-    return () => clearInterval(interval);
-  }, [fetchLog, isActive]);
 
   const handleClear = async () => {
     setLoading(true);
     try {
-      await fetch(`/api/event-log?industryId=${industryId}`, {
-        method: 'DELETE',
-      });
-      setEvents([]);
+      await fetch(`/api/event-log?industryId=${industryId}`, { method: 'DELETE' });
+      setEvents([]); // Immediate local clear; SSE cleared event will also arrive
     } finally {
       setLoading(false);
     }
@@ -107,7 +121,7 @@ export default function EventLog({ industryId, isActive = false }: EventLogProps
         <div>
           <h2 className="text-lg font-semibold text-white">Event Log</h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            {events.length} events · auto-refreshes every 10s
+            {events.length} events · live via SSE
             {lastUpdated && (
               <span className="ml-2">
                 · updated {lastUpdated.toLocaleTimeString()}

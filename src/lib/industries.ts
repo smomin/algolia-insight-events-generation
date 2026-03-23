@@ -13,7 +13,7 @@ export const DEFAULT_PROMPTS = {
   selectBestResult:
     'You are a recommendation engine. Return JSON only in this exact format: {"index": <number>, "reason": "<string>"}. No markdown, no extra text. Select the best result index (0-based) for this persona.',
   generateSecondaryQueries:
-    'Return a JSON array only — no markdown, no code fences, no extra text. Output 3 to 5 short search query strings relevant to the primary result for this persona.',
+    'Return a JSON array only — no markdown, no code fences, no extra text. Output 3 to 5 short search query strings that will find relevant items in the secondary catalog based on the primary result, completing the customer journey toward conversion.',
 };
 
 // ─────────────────────────────────────────────

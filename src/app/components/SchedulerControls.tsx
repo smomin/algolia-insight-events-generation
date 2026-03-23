@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { useSSE } from '@/app/hooks/useSSE';
 
 interface SchedulerStatus {
   isRunning: boolean;
@@ -25,54 +26,50 @@ interface SchedulerControlsProps {
   onStatusChange?: (status: SchedulerStatus) => void;
 }
 
+const DEFAULT_STATUS: SchedulerStatus = {
+  isRunning: false,
+  isDistributing: false,
+  cancelRequested: false,
+  nextRun: null,
+  currentRun: null,
+  lastRun: null,
+};
+
 export default function SchedulerControls({
   industryId,
   industryName,
   onStatusChange,
 }: SchedulerControlsProps) {
-  const [status, setStatus] = useState<SchedulerStatus>({
-    isRunning: false,
-    isDistributing: false,
-    cancelRequested: false,
-    nextRun: null,
-    currentRun: null,
-    lastRun: null,
-  });
+  const [status, setStatus] = useState<SchedulerStatus>(DEFAULT_STATUS);
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<string>('');
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/scheduler/status?industryId=${industryId}`);
-      if (res.ok) {
-        const data = await res.json();
-        const s: SchedulerStatus = {
-          isRunning: data.isRunning ?? false,
-          isDistributing: data.isDistributing ?? false,
-          cancelRequested: data.cancelRequested ?? false,
-          nextRun: data.nextRun ?? null,
-          currentRun: data.currentRun ?? null,
-          lastRun: data.lastRun ?? null,
-        };
-        setStatus(s);
-        onStatusChange?.(s);
-      }
-    } catch {
-      // ignore
-    }
-  }, [industryId, onStatusChange]);
+  // Keep a ref to the latest status so the SSE handler can read it without
+  // needing to be recreated (which would close/reopen the EventSource).
+  const statusRef = useRef<SchedulerStatus>(status);
+  statusRef.current = status;
 
-  // Poll fast while a run is in progress, slow when idle
-  const pollInterval = status.isDistributing ? 3_000 : status.isRunning ? 30_000 : 60_000;
+  // ── SSE — receive initial snapshot + live status updates ─────────────
+  const sseUrl = `/api/stream?industryId=${industryId}&types=status`;
 
-  useEffect(() => {
-    fetchStatus();
-    const interval = setInterval(fetchStatus, pollInterval);
-    return () => clearInterval(interval);
-  }, [fetchStatus, pollInterval]);
+  useSSE(sseUrl, ['status'], (_, rawData) => {
+    const update = rawData as Partial<SchedulerStatus>;
+    // Merge only defined fields so partial updates don't erase unrelated state
+    const next: SchedulerStatus = {
+      ...statusRef.current,
+      ...(update.isRunning !== undefined ? { isRunning: update.isRunning } : {}),
+      ...(update.isDistributing !== undefined ? { isDistributing: update.isDistributing } : {}),
+      ...(update.cancelRequested !== undefined ? { cancelRequested: update.cancelRequested } : {}),
+      ...(update.nextRun !== undefined ? { nextRun: update.nextRun } : {}),
+      ...(update.currentRun !== undefined ? { currentRun: update.currentRun } : {}),
+      ...(update.lastRun !== undefined ? { lastRun: update.lastRun } : {}),
+    };
+    setStatus(next);
+    onStatusChange?.(next);
+  });
 
-  // Countdown to next run
+  // Countdown to next cron run
   useEffect(() => {
     if (!status.nextRun) { setCountdown(''); return; }
     const update = () => {
@@ -109,7 +106,7 @@ export default function SchedulerControls({
     setLoading(true);
     try {
       await apiFetch('/api/scheduler/start', { ...body, industryId });
-      await fetchStatus();
+      // SSE will push the status change automatically
     } finally {
       setLoading(false);
     }
@@ -119,7 +116,6 @@ export default function SchedulerControls({
     setLoading(true);
     try {
       await apiFetch('/api/scheduler/stop', { industryId });
-      await fetchStatus();
     } finally {
       setLoading(false);
     }
@@ -129,7 +125,15 @@ export default function SchedulerControls({
     setLoading(true);
     try {
       await apiFetch('/api/run-all', { industryId });
-      await fetchStatus();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStopRun = async () => {
+    setLoading(true);
+    try {
+      await apiFetch('/api/scheduler/stop', { industryId });
     } finally {
       setLoading(false);
     }
@@ -137,16 +141,6 @@ export default function SchedulerControls({
 
   const cronExpr = process.env.NEXT_PUBLIC_SCHEDULER_CRON ?? '0 6 * * *';
   const isActive = status.isRunning || status.isDistributing;
-
-  const handleStopRun = async () => {
-    setLoading(true);
-    try {
-      await apiFetch('/api/scheduler/stop', { industryId });
-      await fetchStatus();
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">

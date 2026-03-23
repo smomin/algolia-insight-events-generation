@@ -40,18 +40,54 @@ export async function generatePrimaryQuery(
   return content.text.trim();
 }
 
+// ─────────────────────────────────────────────
+// Shared utility: extract a compact, readable summary of an Algolia hit
+// using whatever fields are actually present in the record.
+// ─────────────────────────────────────────────
+
+const HIT_SKIP_FIELDS = new Set([
+  'objectID',
+  '_highlightResult',
+  '_rankingInfo',
+  '_distinctSeqID',
+  '_geoloc',
+  '_snippetResult',
+  '__position',
+]);
+
+function summarizeHit(hit: AlgoliaHit): Record<string, unknown> {
+  const summary: Record<string, unknown> = { objectID: hit.objectID };
+
+  for (const [key, val] of Object.entries(hit)) {
+    if (HIT_SKIP_FIELDS.has(key) || key.startsWith('_')) continue;
+    if (val === undefined || val === null || val === '') continue;
+
+    if (Array.isArray(val)) {
+      const items = (val as unknown[])
+        .slice(0, 8)
+        .map(String)
+        .filter((s) => s.length > 0 && s.length < 150);
+      if (items.length > 0) summary[key] = items;
+    } else if (typeof val === 'object') {
+      // skip nested objects to keep the prompt compact
+    } else {
+      const str = String(val);
+      summary[key] = str.length > 200 ? str.slice(0, 200) + '…' : str;
+    }
+  }
+
+  return summary;
+}
+
 export async function selectBestResult(
   persona: Persona,
   hits: AlgoliaHit[],
   promptInstruction: string,
   industryId?: string
 ): Promise<{ index: number; reason: string }> {
-  const resultList = hits.map((h, i) => ({
-    index: i,
-    objectID: h.objectID,
-    name: (h.name as string) ?? (h.title as string) ?? h.objectID,
-    description: (h.description as string) ?? '',
-  }));
+  // Build a compact summary of each hit using only the fields that exist in
+  // the record — no hardcoded field names.
+  const resultList = hits.map((h, i) => ({ index: i, ...summarizeHit(h) }));
 
   const client = await getClient(industryId);
   const message = await client.messages.create({
@@ -85,28 +121,28 @@ export async function generateSecondaryQueries(
   primaryHit: AlgoliaHit,
   persona: Persona,
   promptInstruction: string,
-  industryId?: string
+  industryId?: string,
+  secondaryIndices?: Array<{ id: string; label: string }>
 ): Promise<string[]> {
-  const name =
-    (primaryHit.name as string) ??
-    (primaryHit.title as string) ??
-    primaryHit.objectID;
-  const context = (primaryHit.description as string) ?? '';
-  const ingredients = (primaryHit.ingredients as string[]) ?? [];
-  const contextHint =
-    ingredients.length > 0
-      ? ingredients.slice(0, 15).join(', ')
-      : context.slice(0, 300);
+  // Summarize the primary hit using all fields present in the record so the
+  // prompt is driven entirely by the data in the DB — no hardcoded field names.
+  const hitSummary = summarizeHit(primaryHit);
+
+  // Tell Claude which secondary catalogs it is targeting so it can tailor queries.
+  const indexHint =
+    secondaryIndices && secondaryIndices.length > 0
+      ? `\nSearching in: ${secondaryIndices.map((si) => si.label).join(', ')}`
+      : '';
 
   const client = await getClient(industryId);
   const message = await client.messages.create({
     model: MODEL,
-    max_tokens: 200,
+    max_tokens: 300,
     system: promptInstruction,
     messages: [
       {
         role: 'user',
-        content: `Primary result: ${name}\nContext: ${contextHint}\nPersona budget: ${persona.budget ?? 'medium'}\nPersona tags: ${(persona.tags ?? persona.dietaryPreferences ?? []).join(', ')}`,
+        content: `Primary result:\n${JSON.stringify(hitSummary, null, 2)}\nPersona budget: ${persona.budget ?? 'medium'}\nPersona tags: ${(persona.tags ?? persona.dietaryPreferences ?? []).join(', ')}${indexHint}`,
       },
     ],
   });
@@ -128,7 +164,7 @@ export async function generateSecondaryQueries(
       .map((q) => String(q).trim())
       .filter(Boolean);
   } catch {
-    return [name];
+    return [primaryHit.objectID];
   }
 }
 
@@ -239,35 +275,3 @@ ${indexContext || 'No sample records available — generate plausible personas b
   }));
 }
 
-// ─────────────────────────────────────────────
-// Legacy grocery aliases (used nowhere new but kept for safety)
-// ─────────────────────────────────────────────
-
-export async function generateRecipeQuery(persona: Persona): Promise<string> {
-  return generatePrimaryQuery(
-    persona,
-    'You are a recipe search query generator. Output only the search query string, nothing else. No quotes, no punctuation at the end.'
-  );
-}
-
-export async function selectBestRecipe(
-  persona: Persona,
-  hits: AlgoliaHit[]
-): Promise<{ index: number; reason: string }> {
-  return selectBestResult(
-    persona,
-    hits,
-    'You are a recipe recommendation engine. Return JSON only in this exact format: {"index": <number>, "reason": "<string>"}. No markdown, no extra text.'
-  );
-}
-
-export async function generateIngredientQueries(
-  recipe: AlgoliaHit,
-  persona: Persona
-): Promise<string[]> {
-  return generateSecondaryQueries(
-    recipe,
-    persona,
-    'You are a grocery shopping assistant. Return a JSON array only — no markdown, no code fences, no extra text. Output 3 to 5 short grocery product search query strings. Example: ["chicken breast","pasta","tomato sauce"]'
-  );
-}
