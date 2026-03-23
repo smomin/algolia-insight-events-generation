@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const personaId = body.personaId as string | undefined;
-    const industryId = (body.industryId as string | undefined) ?? 'grocery';
+    const industryId = (body.industryId as string | undefined) ?? process.env.DEFAULT_INDUSTRY_ID ?? 'grocery';
 
     const industry = await getIndustry(industryId);
     if (!industry) {

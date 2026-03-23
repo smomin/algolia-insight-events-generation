@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const id = industryId ?? 'grocery';
+    const id = industryId ?? process.env.DEFAULT_INDUSTRY_ID ?? 'grocery';
     const industry = await getIndustry(id);
     if (!industry) {
       return NextResponse.json({ error: `Industry "${id}" not found` }, { status: 404 });

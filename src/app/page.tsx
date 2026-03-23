@@ -58,7 +58,9 @@ const DOT: Record<string, string> = {
 export default function Home() {
   const [industries, setIndustries] = useState<IndustryListItem[]>([]);
   const [personasByIndustry, setPersonasByIndustry] = useState<Record<string, Persona[]>>({});
-  const [activeIndustry, setActiveIndustry] = useState<string>('grocery');
+  const [activeIndustry, setActiveIndustry] = useState<string>(
+    process.env.NEXT_PUBLIC_DEFAULT_INDUSTRY_ID ?? 'grocery'
+  );
   const [latestSession, setLatestSession] = useState<SessionNotification | null>(null);
   const [runningStatus, setRunningStatus] = useState<RunningStatus>({});
   const [runningAllIndustries, setRunningAllIndustries] = useState(false);

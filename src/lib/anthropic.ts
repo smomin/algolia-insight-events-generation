@@ -3,7 +3,7 @@ import type { Persona } from '@/types';
 import type { AlgoliaHit } from '@/lib/algolia';
 import { resolveCredentials } from './appConfig';
 
-const MODEL = 'claude-sonnet-4-5';
+const MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5';
 
 async function getClient(industryId?: string): Promise<Anthropic> {
   const creds = await resolveCredentials(industryId);

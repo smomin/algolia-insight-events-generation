@@ -7,7 +7,8 @@ import type {
 } from '@/types';
 import { resolveCredentials } from './appConfig';
 
-const INSIGHTS_ENDPOINT = 'https://insights.algolia.io/1/events';
+const INSIGHTS_ENDPOINT =
+  process.env.ALGOLIA_INSIGHTS_URL ?? 'https://insights.algolia.io/1/events';
 
 function randomFloat(min: number, max: number): number {
   return Math.round((Math.random() * (max - min) + min) * 100) / 100;

@@ -4,8 +4,7 @@
  * The encryption key is derived from ENCRYPTION_SECRET (env var) using
  * scryptSync. The ciphertext format is: "<iv_hex>:<authTag_hex>:<data_hex>"
  *
- * If ENCRYPTION_SECRET is not set a built-in default is used (data is still
- * encrypted — just not with a custom secret).
+ * ENCRYPTION_SECRET must be set — the app throws at startup if it is missing.
  */
 
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
@@ -15,9 +14,13 @@ const IV_BYTES = 12;
 const SALT = 'algolia-insight-cfg-v1';
 
 function deriveKey(): Buffer {
-  const secret =
-    process.env.ENCRYPTION_SECRET ??
-    'algolia-insight-default-secret-change-me-32!';
+  const secret = process.env.ENCRYPTION_SECRET;
+  if (!secret) {
+    throw new Error(
+      'ENCRYPTION_SECRET env var is not set. ' +
+      'Set it to a strong random string (min 32 chars) before starting the app.'
+    );
+  }
   return scryptSync(secret, SALT, 32);
 }
 

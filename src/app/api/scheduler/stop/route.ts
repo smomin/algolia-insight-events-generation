@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const id = industryId ?? 'grocery';
+    const id = industryId ?? process.env.DEFAULT_INDUSTRY_ID ?? 'grocery';
     stopScheduler(id);
     await cancelDistribution(id);
 
