@@ -1,18 +1,20 @@
 import { NextResponse } from 'next/server';
 import {
+  getAppConfigStatus,
   getCredentialStatus,
   saveAppConfig,
 } from '@/lib/appConfig';
-import type { CredentialFields } from '@/types';
+import type { CredentialFields, LLMProviderConfig } from '@/types';
 
 /**
  * GET /api/app-config
- * Returns current credential status — never exposes raw secret values.
+ * Returns current credential + LLM provider status — never exposes raw secret values.
  */
 export async function GET() {
   try {
-    const status = await getCredentialStatus();
-    return NextResponse.json({ status });
+    const appStatus = await getAppConfigStatus();
+    // Keep backward compat: also return top-level `status` for legacy consumers
+    return NextResponse.json({ status: appStatus.credentials, appStatus });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -21,30 +23,44 @@ export async function GET() {
 
 /**
  * PUT /api/app-config
- * Accepts plain-text credential values, encrypts, and stores.
- * Sending an empty string for a field clears it (reverts to env fallback).
+ * Accepts credential values and/or LLM provider configuration.
+ * Sending an empty string for a credential field clears it (reverts to env fallback).
  */
 export async function PUT(request: Request) {
   try {
-    const body = (await request.json()) as Partial<CredentialFields>;
+    const body = (await request.json()) as Partial<CredentialFields> & {
+      llmProviders?: LLMProviderConfig[];
+      defaultLlmProviderId?: string;
+    };
 
-    const allowed: (keyof CredentialFields)[] = [
+    const allowedCreds: (keyof CredentialFields)[] = [
       'algoliaAppId',
       'algoliaSearchApiKey',
-      'anthropicApiKey',
     ];
 
-    const filtered: Partial<CredentialFields> = {};
-    for (const key of allowed) {
+    const filtered: Partial<CredentialFields> & {
+      llmProviders?: LLMProviderConfig[];
+      defaultLlmProviderId?: string;
+    } = {};
+
+    for (const key of allowedCreds) {
       if (key in body) {
         (filtered as Record<string, string>)[key] =
           (body as Record<string, string>)[key] ?? '';
       }
     }
 
+    if ('llmProviders' in body) {
+      filtered.llmProviders = body.llmProviders;
+    }
+    if ('defaultLlmProviderId' in body) {
+      filtered.defaultLlmProviderId = body.defaultLlmProviderId ?? '';
+    }
+
     await saveAppConfig(filtered);
+    const appStatus = await getAppConfigStatus();
     const status = await getCredentialStatus();
-    return NextResponse.json({ ok: true, status });
+    return NextResponse.json({ ok: true, status, appStatus });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });

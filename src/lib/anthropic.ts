@@ -1,18 +1,6 @@
-import Anthropic from '@anthropic-ai/sdk';
 import type { Persona } from '@/types';
 import type { AlgoliaHit } from '@/lib/algolia';
-import { resolveCredentials } from './appConfig';
-
-const MODEL = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-4-5';
-
-async function getClient(industryId?: string): Promise<Anthropic> {
-  const creds = await resolveCredentials(industryId);
-  return new Anthropic({
-    apiKey: creds.anthropicApiKey,
-    maxRetries: 4,      // retry on 529 overloaded / 529 / 503 (SDK respects x-should-retry)
-    timeout: 60_000,    // 60s timeout per attempt
-  });
-}
+import { callLLM } from './llm';
 
 // ─────────────────────────────────────────────
 // Generic functions — driven by industry prompts
@@ -23,21 +11,11 @@ export async function generatePrimaryQuery(
   promptInstruction: string,
   industryId?: string
 ): Promise<string> {
-  const client = await getClient(industryId);
-  const message = await client.messages.create({
-    model: MODEL,
-    max_tokens: 100,
-    system: promptInstruction,
-    messages: [
-      {
-        role: 'user',
-        content: `Persona:\n${JSON.stringify(persona, null, 2)}`,
-      },
-    ],
-  });
-  const content = message.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected response type');
-  return content.text.trim();
+  return callLLM(
+    [{ role: 'user', content: `Persona:\n${JSON.stringify(persona, null, 2)}` }],
+    { systemPrompt: promptInstruction, maxTokens: 100 },
+    industryId
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -85,31 +63,21 @@ export async function selectBestResult(
   promptInstruction: string,
   industryId?: string
 ): Promise<{ index: number; reason: string }> {
-  // Build a compact summary of each hit using only the fields that exist in
-  // the record — no hardcoded field names.
   const resultList = hits.map((h, i) => ({ index: i, ...summarizeHit(h) }));
 
-  const client = await getClient(industryId);
-  const message = await client.messages.create({
-    model: MODEL,
-    max_tokens: 200,
-    system: promptInstruction,
-    messages: [
+  const text = await callLLM(
+    [
       {
         role: 'user',
         content: `Persona:\n${JSON.stringify(persona, null, 2)}\n\nResults:\n${JSON.stringify(resultList, null, 2)}`,
       },
     ],
-  });
-
-  const content = message.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected response type');
+    { systemPrompt: promptInstruction, maxTokens: 200 },
+    industryId
+  );
 
   try {
-    const parsed = JSON.parse(content.text.trim()) as {
-      index: number;
-      reason: string;
-    };
+    const parsed = JSON.parse(text) as { index: number; reason: string };
     const idx = Math.max(0, Math.min(parsed.index, hits.length - 1));
     return { index: idx, reason: parsed.reason };
   } catch {
@@ -124,39 +92,30 @@ export async function generateSecondaryQueries(
   industryId?: string,
   secondaryIndices?: Array<{ id: string; label: string }>
 ): Promise<string[]> {
-  // Summarize the primary hit using all fields present in the record so the
-  // prompt is driven entirely by the data in the DB — no hardcoded field names.
   const hitSummary = summarizeHit(primaryHit);
 
-  // Tell Claude which secondary catalogs it is targeting so it can tailor queries.
   const indexHint =
     secondaryIndices && secondaryIndices.length > 0
       ? `\nSearching in: ${secondaryIndices.map((si) => si.label).join(', ')}`
       : '';
 
-  const client = await getClient(industryId);
-  const message = await client.messages.create({
-    model: MODEL,
-    max_tokens: 300,
-    system: promptInstruction,
-    messages: [
+  const raw = await callLLM(
+    [
       {
         role: 'user',
         content: `Primary result:\n${JSON.stringify(hitSummary, null, 2)}\nPersona budget: ${persona.budget ?? 'medium'}\nPersona tags: ${(persona.tags ?? persona.dietaryPreferences ?? []).join(', ')}${indexHint}`,
       },
     ],
-  });
+    { systemPrompt: promptInstruction, maxTokens: 300 },
+    industryId
+  );
 
-  const content = message.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected response type');
-
-  const raw = content.text
-    .trim()
+  const cleaned = raw
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '');
 
   try {
-    const parsed = JSON.parse(raw) as string[];
+    const parsed = JSON.parse(cleaned) as string[];
     if (!Array.isArray(parsed) || parsed.length === 0)
       throw new Error('Invalid response');
     return parsed
@@ -186,11 +145,9 @@ export async function generatePersonasForIndustry(
   existingPersonaNames: string[],
   industryId?: string
 ): Promise<Persona[]> {
-  // Build a condensed description of each index's data
-  const indexContext = indexSamples.map(({ indexId, label, role, sampleRecords }) => {
+  const indexContext = indexSamples.map(({ label, role, sampleRecords }) => {
     if (sampleRecords.length === 0) return null;
 
-    // Extract representative field names and sample values
     const fieldFrequency: Record<string, number> = {};
     const fieldSamples: Record<string, unknown[]> = {};
     const skipFields = new Set(['objectID', '_highlightResult', '_rankingInfo', '_distinctSeqID']);
@@ -249,24 +206,18 @@ Personas must be diverse across skill level, budget, age groups, and use cases. 
 Sample data from configured indices:
 ${indexContext || 'No sample records available — generate plausible personas based on the industry name alone.'}`;
 
-  const client = await getClient(industryId);
-  const message = await client.messages.create({
-    model: MODEL,
-    max_tokens: 4000,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: userMessage }],
-  });
+  const raw = await callLLM(
+    [{ role: 'user', content: userMessage }],
+    { systemPrompt, maxTokens: 4000 },
+    industryId
+  );
 
-  const content = message.content[0];
-  if (content.type !== 'text') throw new Error('Unexpected response type from Claude');
-
-  const raw = content.text
-    .trim()
+  const cleaned = raw
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '');
 
-  const parsed = JSON.parse(raw) as Persona[];
-  if (!Array.isArray(parsed)) throw new Error('Claude did not return a JSON array');
+  const parsed = JSON.parse(cleaned) as Persona[];
+  if (!Array.isArray(parsed)) throw new Error('LLM did not return a JSON array');
 
   return parsed.map((p, i) => ({
     ...p,
@@ -274,4 +225,3 @@ ${indexContext || 'No sample records available — generate plausible personas b
     userToken: p.userToken || `gen-${Math.random().toString(36).slice(2, 10)}`,
   }));
 }
-

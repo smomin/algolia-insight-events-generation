@@ -65,6 +65,8 @@ export async function POST(request: Request) {
         generateSecondaryQueries:
           'Return a JSON array only. Output 3-5 short search query strings relevant to the primary result for this persona.',
       },
+      ...(body.credentials ? { credentials: body.credentials } : {}),
+      ...(body.llmProviderId ? { llmProviderId: body.llmProviderId } : {}),
     });
 
     return NextResponse.json({ industry }, { status: 201 });

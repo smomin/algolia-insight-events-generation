@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import type { IndustryV2, FlexIndex, IndexEvent, AlgoliaEventType, AlgoliaEventSubtype, IndustryCredentials } from '@/types';
+import type { IndustryV2, FlexIndex, IndexEvent, AlgoliaEventType, AlgoliaEventSubtype, IndustryCredentials, LLMProviderType } from '@/types';
 
 // ─────────────────────────────────────────────
 // Constants
@@ -72,7 +72,13 @@ interface IndexForm {
 interface CredentialsForm {
   algoliaAppId: string;
   algoliaSearchApiKey: string;
-  anthropicApiKey: string;
+}
+
+interface LLMProviderOption {
+  id: string;
+  name: string;
+  type: LLMProviderType;
+  defaultModel: string;
 }
 
 interface IndustryForm {
@@ -85,12 +91,12 @@ interface IndustryForm {
   promptSecondary: string;
   indices: IndexForm[];
   credentials: CredentialsForm;
+  llmProviderId: string;  // '' = use app default
 }
 
 const EMPTY_CREDS: CredentialsForm = {
   algoliaAppId: '',
   algoliaSearchApiKey: '',
-  anthropicApiKey: '',
 };
 
 function uid() {
@@ -127,11 +133,11 @@ function industryToForm(ind: IndustryV2): IndustryForm {
     credentials: {
       algoliaAppId:        (ind.credentials?.algoliaAppId        ?? ''),
       algoliaSearchApiKey: (ind.credentials?.algoliaSearchApiKey ? '••set••' : ''),
-      anthropicApiKey:     (ind.credentials?.anthropicApiKey     ? '••set••' : ''),
     },
     promptPrimary: ind.claudePrompts.generatePrimaryQuery,
     promptSelect: ind.claudePrompts.selectBestResult,
     promptSecondary: ind.claudePrompts.generateSecondaryQueries,
+    llmProviderId: ind.llmProviderId ?? '',
     indices: ind.indices.map((idx) => ({
       _key: uid(),
       id: idx.id,
@@ -156,8 +162,6 @@ function formToIndustry(form: IndustryForm, existing?: IndustryV2): Omit<Industr
     creds.algoliaAppId = c.algoliaAppId.trim();
   if (c.algoliaSearchApiKey.trim() && !c.algoliaSearchApiKey.includes('••'))
     creds.algoliaSearchApiKey = c.algoliaSearchApiKey.trim();
-  if (c.anthropicApiKey.trim() && !c.anthropicApiKey.includes('••'))
-    creds.anthropicApiKey = c.anthropicApiKey.trim();
   // Preserve existing encrypted credentials that weren't changed (placeholder still shown)
   const existingCreds = existing?.credentials ?? {};
   const mergedCreds: IndustryCredentials = { ...existingCreds };
@@ -165,8 +169,6 @@ function formToIndustry(form: IndustryForm, existing?: IndustryV2): Omit<Industr
   // For sensitive: if user typed a real value, override; if blank, clear; if placeholder, keep existing
   if (c.algoliaSearchApiKey === '')       delete mergedCreds.algoliaSearchApiKey;
   else if (!c.algoliaSearchApiKey.includes('••')) mergedCreds.algoliaSearchApiKey = creds.algoliaSearchApiKey;
-  if (c.anthropicApiKey === '')           delete mergedCreds.anthropicApiKey;
-  else if (!c.anthropicApiKey.includes('••'))     mergedCreds.anthropicApiKey = creds.anthropicApiKey;
 
   return {
     id: form.id.trim().toLowerCase().replace(/\s+/g, '_'),
@@ -179,6 +181,7 @@ function formToIndustry(form: IndustryForm, existing?: IndustryV2): Omit<Industr
       selectBestResult: form.promptSelect.trim() || DEFAULT_PROMPTS.selectBestResult,
       generateSecondaryQueries: form.promptSecondary.trim() || DEFAULT_PROMPTS.generateSecondaryQueries,
     },
+    ...(form.llmProviderId ? { llmProviderId: form.llmProviderId } : {}),
     indices: form.indices.map((idx) => ({
       id: idx.id.trim() || idx.label.trim().toLowerCase().replace(/\s+/g, '_') || uid(),
       label: idx.label.trim(),
@@ -192,7 +195,6 @@ function formToIndustry(form: IndustryForm, existing?: IndustryV2): Omit<Industr
           eventName: e.eventName.trim(),
         })),
     })),
-    ...(existing ? {} : {}),
   };
 }
 
@@ -393,10 +395,19 @@ function IndexEditor({
 // Main editor
 // ─────────────────────────────────────────────
 
+const TYPE_ICONS: Record<LLMProviderType, string> = {
+  anthropic: '🟠',
+  openai: '🟢',
+  ollama: '🦙',
+};
+
 export default function IndustryEditor({ industryId, onSaved, onClose }: IndustryEditorProps) {
   const isCreate = !industryId;
 
   const [showCredentials, setShowCredentials] = useState(false);
+  const [showLLM, setShowLLM] = useState(false);
+  const [availableProviders, setAvailableProviders] = useState<LLMProviderOption[]>([]);
+  const [appDefaultProviderId, setAppDefaultProviderId] = useState<string>('');
 
   const [form, setForm] = useState<IndustryForm>({
     id: '',
@@ -407,6 +418,7 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
     promptPrimary: DEFAULT_PROMPTS.generatePrimaryQuery,
     promptSelect: DEFAULT_PROMPTS.selectBestResult,
     promptSecondary: DEFAULT_PROMPTS.generateSecondaryQueries,
+    llmProviderId: '',
     indices: [
       {
         _key: uid(),
@@ -428,6 +440,21 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
   const [error, setError] = useState<string | null>(null);
   const [showPrompts, setShowPrompts] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
+
+  // Load available LLM providers from app config
+  useEffect(() => {
+    fetch('/api/app-config')
+      .then((r) => r.json())
+      .then((d: { appStatus?: { llmProviders?: LLMProviderOption[]; defaultLlmProviderId?: string } }) => {
+        if (d.appStatus?.llmProviders) {
+          setAvailableProviders(d.appStatus.llmProviders);
+        }
+        if (d.appStatus?.defaultLlmProviderId) {
+          setAppDefaultProviderId(d.appStatus.defaultLlmProviderId);
+        }
+      })
+      .catch(() => {/* non-critical */});
+  }, []);
 
   // Load existing industry in edit mode
   useEffect(() => {
@@ -705,6 +732,75 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                 )}
               </section>
 
+              {/* ── LLM Configuration (collapsible) ── */}
+              <section>
+                <button
+                  onClick={() => setShowLLM((v) => !v)}
+                  className="flex items-center gap-2 text-xs font-semibold text-gray-400 uppercase tracking-widest w-full"
+                >
+                  <svg
+                    className={`w-3 h-3 transition-transform ${showLLM ? 'rotate-90' : ''}`}
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                  </svg>
+                  LLM Configuration
+                  {form.llmProviderId ? (
+                    <span className="text-[10px] font-normal normal-case tracking-normal text-blue-400 ml-1">
+                      (override set)
+                    </span>
+                  ) : (
+                    <span className="text-gray-600 font-normal normal-case tracking-normal">(using app default)</span>
+                  )}
+                </button>
+
+                {showLLM && (
+                  <div className="mt-3 space-y-3">
+                    <p className="text-[11px] text-gray-500 bg-gray-800 rounded-lg p-2.5">
+                      Select a specific LLM provider and model for this industry. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
+                    </p>
+
+                    {/* Provider selector */}
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Provider</label>
+                      {availableProviders.length === 0 ? (
+                        <p className="text-[11px] text-gray-600 bg-gray-800 rounded-lg p-2.5">
+                          No providers configured. Add providers in <span className="text-blue-400">App Settings → LLM Providers</span>.
+                        </p>
+                      ) : (
+                        <select
+                          value={form.llmProviderId}
+                          onChange={(e) => setForm({ ...form, llmProviderId: e.target.value })}
+                          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="">
+                            App Default{appDefaultProviderId
+                              ? ` (${availableProviders.find((p) => p.id === appDefaultProviderId)?.name ?? appDefaultProviderId})`
+                              : ' (not set)'}
+                          </option>
+                          {availableProviders.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {TYPE_ICONS[p.type]} {p.name} — {p.defaultModel}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    {/* Clear override shortcut */}
+                    {form.llmProviderId && (
+                      <button
+                        type="button"
+                        onClick={() => setForm({ ...form, llmProviderId: '' })}
+                        className="text-xs text-gray-600 hover:text-rose-400 transition-colors"
+                      >
+                        ✕ Reset to app default
+                      </button>
+                    )}
+                  </div>
+                )}
+              </section>
+
               {/* ── Credential Overrides (collapsible) ── */}
               <section>
                 <button
@@ -728,9 +824,8 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                     </p>
 
                     {([
-                      { key: 'algoliaAppId' as const,        label: 'Algolia App ID',    secret: false, placeholder: 'e.g. ABCDE12345' },
-                      { key: 'algoliaSearchApiKey' as const,  label: 'Search API Key',   secret: true,  placeholder: 'Leave blank to use global' },
-                      { key: 'anthropicApiKey' as const,      label: 'Anthropic API Key', secret: true,  placeholder: 'Leave blank to use global' },
+                      { key: 'algoliaAppId' as const,        label: 'Algolia App ID',  secret: false, placeholder: 'e.g. ABCDE12345' },
+                      { key: 'algoliaSearchApiKey' as const,  label: 'Search API Key', secret: true,  placeholder: 'Leave blank to use global' },
                     ]).map(({ key, label, secret, placeholder }) => {
                       const val = form.credentials[key];
                       const isPlaceholder = val.includes('••set••');

@@ -22,6 +22,22 @@ export interface FlexIndex {
 }
 
 // ─────────────────────────────────────────────
+// LLM Provider configuration
+// ─────────────────────────────────────────────
+
+export type LLMProviderType = 'openai' | 'anthropic' | 'ollama';
+
+/** A configured LLM provider — stored (with API key encrypted) in AppConfig */
+export interface LLMProviderConfig {
+  id: string;             // unique slug, e.g. "my-anthropic" or "local-ollama"
+  name: string;           // display name, e.g. "Anthropic (prod)"
+  type: LLMProviderType;
+  apiKey?: string;        // stored AES-256-GCM encrypted; not required for Ollama
+  baseUrl?: string;       // required for Ollama; optional for OpenAI-compatible endpoints
+  defaultModel: string;   // e.g. "claude-sonnet-4-5", "gpt-4o", "llama3.2"
+}
+
+// ─────────────────────────────────────────────
 // App-level configuration (stored encrypted in Couchbase)
 // ─────────────────────────────────────────────
 
@@ -29,12 +45,13 @@ export interface FlexIndex {
 export interface CredentialFields {
   algoliaAppId?: string;
   algoliaSearchApiKey?: string;   // stored AES-256-GCM encrypted
-  anthropicApiKey?: string;       // stored AES-256-GCM encrypted
 }
 
 /** Global app credentials — single document in the appConfig collection. */
 export interface AppConfig extends CredentialFields {
   updatedAt: string;
+  llmProviders?: LLMProviderConfig[];  // all configured LLM providers
+  defaultLlmProviderId?: string;       // provider to use when no industry override
 }
 
 /** Per-industry credential overrides — override global app config or env vars. */
@@ -53,6 +70,7 @@ export interface IndustryV2 {
     generateSecondaryQueries: string;
   };
   credentials?: IndustryCredentials; // optional per-industry credential overrides
+  llmProviderId?: string;     // override app-level default provider for this industry
   isBuiltIn: boolean;          // built-in industries cannot be deleted
   createdAt: string;
   updatedAt: string;
