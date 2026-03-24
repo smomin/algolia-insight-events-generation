@@ -34,6 +34,28 @@ interface IndustryListItem extends IndustryV2 {
   personaCount: number;
 }
 
+interface AlgoliaAppStatus {
+  id: string;
+  name: string;
+  appId: string;
+  hasSearchApiKey: boolean;
+}
+
+interface LLMProviderStatus {
+  id: string;
+  name: string;
+  type: string;
+  hasApiKey: boolean;
+  defaultModel: string;
+}
+
+interface AppStatus {
+  algoliaApps: AlgoliaAppStatus[];
+  defaultAlgoliaAppId?: string;
+  llmProviders: LLMProviderStatus[];
+  defaultLlmProviderId?: string;
+}
+
 // ─────────────────────────────────────────────
 // Color helpers (covers all palette options)
 // ─────────────────────────────────────────────
@@ -67,6 +89,8 @@ export default function Home() {
   const [runningAllIndustries, setRunningAllIndustries] = useState(false);
   const [distributingIndustries, setDistributingIndustries] = useState<Record<string, boolean>>({});
 
+  const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
+
   // Editor state: undefined = closed, null = create mode, string = edit industryId
   const [editorTarget, setEditorTarget] = useState<string | null | undefined>(undefined);
   const [appConfigOpen, setAppConfigOpen] = useState(false);
@@ -88,6 +112,16 @@ export default function Home() {
   }, [activeIndustry]);
 
   useEffect(() => { loadIndustries(); }, [loadIndustries]);
+
+  // ── Load app config status (for Algolia app + LLM resolution) ──
+  useEffect(() => {
+    fetch('/api/app-config')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.appStatus) setAppStatus(data.appStatus);
+      })
+      .catch(() => {});
+  }, []);
 
   // ── Load personas for active industry ──
   useEffect(() => {
@@ -183,6 +217,18 @@ export default function Home() {
   const activePersonas = personasByIndustry[activeIndustry] ?? [];
   const anyRunning = Object.values(runningStatus).some((s) => s.isRunning || s.isDistributing);
   const runningCount = Object.values(runningStatus).filter((s) => s.isRunning || s.isDistributing).length;
+
+  const resolvedAlgoliaApp = activeIndustryMeta && appStatus
+    ? appStatus.algoliaApps.find(
+        (a) => a.id === (activeIndustryMeta.algoliaAppConfigId ?? appStatus.defaultAlgoliaAppId)
+      ) ?? null
+    : null;
+
+  const resolvedLLM = activeIndustryMeta && appStatus
+    ? appStatus.llmProviders.find(
+        (p) => p.id === (activeIndustryMeta.llmProviderId ?? appStatus.defaultLlmProviderId)
+      ) ?? null
+    : null;
 
   const industrySummaries: IndustrySummary[] = industries.map((i) => ({
     id: i.id,
@@ -318,6 +364,36 @@ export default function Home() {
                     {activeIndustryMeta.indices.length} {activeIndustryMeta.indices.length === 1 ? 'index' : 'indices'} ·{' '}
                     {activeIndustryMeta.indices.reduce((s, i) => s + i.events.length, 0)} events/session
                   </p>
+                  {(resolvedAlgoliaApp || resolvedLLM) && (
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      {resolvedAlgoliaApp && (
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
+                          <svg className="w-2.5 h-2.5 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+                          </svg>
+                          <span className="text-blue-300 font-medium">{resolvedAlgoliaApp.name}</span>
+                          <span className="text-slate-600">·</span>
+                          <span className="font-mono text-slate-500">{resolvedAlgoliaApp.appId}</span>
+                          {activeIndustryMeta.algoliaAppConfigId && (
+                            <span className="ml-0.5 text-blue-400/70 italic">override</span>
+                          )}
+                        </span>
+                      )}
+                      {resolvedLLM && (
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
+                          <svg className="w-2.5 h-2.5 text-violet-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                          </svg>
+                          <span className="text-violet-300 font-medium">{resolvedLLM.name}</span>
+                          <span className="text-slate-600">·</span>
+                          <span className="font-mono text-slate-500">{resolvedLLM.defaultModel}</span>
+                          {activeIndustryMeta.llmProviderId && (
+                            <span className="ml-0.5 text-violet-400/70 italic">override</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -450,7 +526,15 @@ export default function Home() {
 
       {/* ── Industry Editor (create / edit) ── */}
       {appConfigOpen && (
-        <AppConfigPanel onClose={() => setAppConfigOpen(false)} />
+        <AppConfigPanel
+          onClose={() => {
+            setAppConfigOpen(false);
+            fetch('/api/app-config')
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => { if (data?.appStatus) setAppStatus(data.appStatus); })
+              .catch(() => {});
+          }}
+        />
       )}
 
       {editorTarget !== undefined && (
