@@ -7,9 +7,33 @@ import AgentStatusCard from './AgentStatusCard';
 import SupervisorLog from './SupervisorLog';
 import GuardrailLog from './GuardrailLog';
 
+interface AlgoliaAppStatus {
+  id: string;
+  name: string;
+  appId: string;
+  hasSearchApiKey: boolean;
+}
+
+interface LLMProviderStatus {
+  id: string;
+  name: string;
+  type: string;
+  hasApiKey: boolean;
+  defaultModel: string;
+}
+
+interface AppStatus {
+  algoliaApps: AlgoliaAppStatus[];
+  defaultAlgoliaAppId?: string;
+  llmProviders: LLMProviderStatus[];
+  defaultLlmProviderId?: string;
+}
+
 interface Props {
   industries: Array<IndustryV2 & { personaCount: number }>;
   eventLimit: number;
+  appStatus?: AppStatus | null;
+  onOpenSettings?: () => void;
 }
 
 interface SupervisorStatusPayload {
@@ -19,7 +43,7 @@ interface SupervisorStatusPayload {
   type?: string;
 }
 
-export default function AgentDashboard({ industries, eventLimit }: Props) {
+export default function AgentDashboard({ industries, eventLimit, appStatus, onOpenSettings }: Props) {
   const [isActive, setIsActive] = useState(false);
   const [startedAt, setStartedAt] = useState<string | undefined>();
   const [supervisorStatus, setSupervisorStatus] = useState<{
@@ -33,6 +57,8 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [isRunningNow, setIsRunningNow] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const decisionsSeen = useRef(new Set<string>());
 
@@ -51,6 +77,12 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
   }, []);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
+
+  // Polling fallback every 15 s — updates agent states and decisions even if SSE events are missed
+  useEffect(() => {
+    const id = setInterval(() => { loadStatus(); }, 15_000);
+    return () => clearInterval(id);
+  }, [loadStatus]);
 
   // Load guardrail violations for each industry
   useEffect(() => {
@@ -168,11 +200,17 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
   // ── Actions ────────────────────────────────────────────────────────
   const handleStart = async () => {
     setIsStarting(true);
+    setStartError(null);
     try {
       const res = await fetch('/api/agents/start', { method: 'POST' });
       if (res.ok || res.status === 409) {
         setIsActive(true);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        setStartError((body as { error?: string }).error ?? `Server error ${res.status}`);
       }
+    } catch (e) {
+      setStartError(e instanceof Error ? e.message : 'Network error');
     } finally {
       setIsStarting(false);
       await loadStatus();
@@ -186,8 +224,29 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
       setIsActive(false);
     } finally {
       setIsStopping(false);
+      await loadStatus();
     }
   };
+
+  const handleRunNow = async () => {
+    setIsRunningNow(true);
+    try {
+      await fetch('/api/agents/tick', { method: 'POST' });
+      // Short delay then refresh status
+      await new Promise((r) => setTimeout(r, 1500));
+      await loadStatus();
+    } finally {
+      setIsRunningNow(false);
+    }
+  };
+
+  // ── Resolved Algolia app + LLM provider (from appStatus defaults) ──
+  const resolvedAlgoliaApp = appStatus
+    ? appStatus.algoliaApps.find((a) => a.id === appStatus.defaultAlgoliaAppId) ?? appStatus.algoliaApps[0] ?? null
+    : null;
+  const resolvedLLM = appStatus
+    ? appStatus.llmProviders.find((p) => p.id === appStatus.defaultLlmProviderId) ?? appStatus.llmProviders[0] ?? null
+    : null;
 
   // ── Derived stats ──────────────────────────────────────────────────
   const allViolations = Object.values(guardrailsByIndustry).flat();
@@ -239,6 +298,24 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
               </div>
             )}
 
+            {isActive && (
+              <button
+                onClick={handleRunNow}
+                disabled={isRunningNow}
+                title="Force immediate supervisor assessment"
+                className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-slate-200 rounded-lg font-medium transition-colors flex items-center gap-1.5 border border-slate-600"
+              >
+                {isRunningNow ? (
+                  <span className="w-3.5 h-3.5 border-2 border-slate-400/30 border-t-slate-400 rounded-full animate-spin" />
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+                Run Now
+              </button>
+            )}
+
             {isActive ? (
               <button
                 onClick={handleStop}
@@ -283,6 +360,21 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
           </div>
         </div>
 
+        {/* Error display */}
+        {startError && (
+          <div className="mt-3 flex items-start gap-2 bg-rose-900/20 border border-rose-800/50 rounded-lg px-3 py-2">
+            <svg className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-sm text-rose-300">{startError}</p>
+            <button onClick={() => setStartError(null)} className="ml-auto text-rose-500 hover:text-rose-300">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+
         {/* How it works — collapsed hint */}
         <div className="mt-4 pt-4 border-t border-slate-700/50 grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-slate-500">
           <div className="flex items-start gap-2">
@@ -306,6 +398,67 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
               Validates every query against the active persona before it hits Algolia. Rejects off-persona queries and suggests better alternatives (up to 3 retries).
             </div>
           </div>
+        </div>
+
+        {/* App settings row */}
+        <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {resolvedAlgoliaApp ? (
+              <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
+                <svg className="w-2.5 h-2.5 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+                </svg>
+                <span className="text-blue-300 font-medium">{resolvedAlgoliaApp.name}</span>
+                <span className="text-slate-600">·</span>
+                <span className="font-mono text-slate-500">{resolvedAlgoliaApp.appId}</span>
+                {!resolvedAlgoliaApp.hasSearchApiKey && (
+                  <span className="ml-0.5 text-rose-400 italic">no key</span>
+                )}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[10px] bg-rose-900/20 border border-rose-800/50 text-rose-400 px-2 py-0.5 rounded-full">
+                <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                No Algolia app configured
+              </span>
+            )}
+
+            {resolvedLLM ? (
+              <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
+                <svg className="w-2.5 h-2.5 text-violet-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                </svg>
+                <span className="text-violet-300 font-medium">{resolvedLLM.name}</span>
+                <span className="text-slate-600">·</span>
+                <span className="font-mono text-slate-500">{resolvedLLM.defaultModel}</span>
+                {!resolvedLLM.hasApiKey && (
+                  <span className="ml-0.5 text-rose-400 italic">no key</span>
+                )}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[10px] bg-rose-900/20 border border-rose-800/50 text-rose-400 px-2 py-0.5 rounded-full">
+                <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                No LLM provider configured
+              </span>
+            )}
+          </div>
+
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-500 px-2.5 py-1 rounded-lg transition-colors"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              App Settings
+            </button>
+          )}
         </div>
       </div>
 
@@ -352,9 +505,25 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
       {/* ── Overview: agent cards grid + supervisor log ────────────── */}
       {activeTab === 'overview' && (
         <>
+          {/* Warning when no industry has personas */}
+          {industries.every((i) => i.personaCount === 0) && (
+            <div className="flex items-start gap-3 bg-amber-900/20 border border-amber-800/50 rounded-xl px-4 py-3">
+              <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <div>
+                <p className="text-sm text-amber-300 font-medium">No personas configured</p>
+                <p className="text-xs text-amber-400/70 mt-0.5">
+                  The supervisor needs personas to run sessions. Switch to the <strong>Industries</strong> tab, select an industry, and use the <strong>Generate Personas</strong> button.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {industries.map((ind) => {
-              const state = agentStates[ind.id] ?? {
+              const agentState = agentStates[ind.id] ?? {
                 industryId: ind.id,
                 phase: 'idle' as const,
                 sessionsCompleted: 0,
@@ -374,8 +543,9 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
                   industryName={ind.name}
                   industryIcon={ind.icon}
                   industryColor={ind.color}
-                  state={state}
+                  state={agentState}
                   dailyTarget={dailyTarget}
+                  personaCount={ind.personaCount}
                 />
               );
             })}
@@ -416,6 +586,7 @@ export default function AgentDashboard({ industries, eventLimit }: Props) {
                 industryColor={tabIndustry.color}
                 state={state}
                 dailyTarget={dailyTarget}
+                personaCount={tabIndustry.personaCount}
               />
             );
           })()}

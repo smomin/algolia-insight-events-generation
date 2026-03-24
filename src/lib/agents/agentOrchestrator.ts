@@ -9,14 +9,12 @@
  * Persists on globalThis to survive Next.js hot reloads.
  */
 
-import type { Persona, AgentSystemStatus } from '@/types';
-import { cbGet } from '@/lib/couchbase';
-import { getAllIndustries } from '@/lib/industries';
+import type { AgentSystemStatus } from '@/types';
 import {
   startSupervisor,
   stopSupervisor,
-  isSupervisorRunning,
   getSupervisorStatus,
+  runSupervisorTickNow,
 } from './SupervisorAgent';
 import { getAllAgentStates } from './IndustryAgent';
 import { getSupervisorDecisions } from '@/lib/agentDb';
@@ -28,34 +26,13 @@ import { getSupervisorDecisions } from '@/lib/agentDb';
 interface OrchestratorState {
   isActive: boolean;
   startedAt?: string;
-  personasByIndustry: Record<string, Persona[]>;
 }
 
 const g = globalThis as typeof globalThis & { _orchestratorState?: OrchestratorState };
 if (!g._orchestratorState) {
-  g._orchestratorState = { isActive: false, personasByIndustry: {} };
+  g._orchestratorState = { isActive: false };
 }
 const state = g._orchestratorState;
-
-// ─────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────
-
-async function loadPersonasForIndustry(industryId: string): Promise<Persona[]> {
-  const doc = await cbGet<{ personas: Persona[] }>('personas', industryId);
-  return doc?.personas ?? [];
-}
-
-async function loadAllPersonas(): Promise<Record<string, Persona[]>> {
-  const industries = await getAllIndustries();
-  const result: Record<string, Persona[]> = {};
-  await Promise.all(
-    industries.map(async (industry) => {
-      result[industry.id] = await loadPersonasForIndustry(industry.id);
-    })
-  );
-  return result;
-}
 
 // ─────────────────────────────────────────────
 // Public API
@@ -65,21 +42,12 @@ export async function startAgentSystem(): Promise<void> {
   if (state.isActive) return;
 
   console.log('[Orchestrator] Starting agent system...');
-
-  state.personasByIndustry = await loadAllPersonas();
   state.isActive = true;
   state.startedAt = new Date().toISOString();
 
-  startSupervisor(state.personasByIndustry);
-
-  const industriesLoaded = Object.keys(state.personasByIndustry).length;
-  const totalPersonas = Object.values(state.personasByIndustry).reduce(
-    (s, arr) => s + arr.length,
-    0
-  );
-  console.log(
-    `[Orchestrator] Agent system started — ${industriesLoaded} industries, ${totalPersonas} personas loaded`
-  );
+  // Supervisor loads personas fresh on every tick — no pre-loading needed
+  startSupervisor();
+  console.log('[Orchestrator] Agent system started.');
 }
 
 export function stopAgentSystem(): void {
@@ -92,10 +60,9 @@ export function isAgentSystemActive(): boolean {
   return state.isActive;
 }
 
-/** Reload personas for all industries (called after a persona update). */
-export async function refreshPersonas(): Promise<void> {
-  state.personasByIndustry = await loadAllPersonas();
-  console.log('[Orchestrator] Personas refreshed.');
+/** Force an immediate supervisor tick (useful from the UI "Run Now" button). */
+export function triggerSupervisorNow(): void {
+  runSupervisorTickNow();
 }
 
 export async function getAgentSystemStatus(): Promise<AgentSystemStatus> {

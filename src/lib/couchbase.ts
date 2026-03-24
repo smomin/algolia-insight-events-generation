@@ -50,10 +50,18 @@ export const COLLECTIONS = [
 export type CollectionName = (typeof COLLECTIONS)[number];
 
 // ─────────────────────────────────────────────
-// Singleton connection
+// Singleton connection — stored on globalThis so it is shared across all
+// Next.js module compilations in the same process (prevents duplicate connections).
 // ─────────────────────────────────────────────
 
-let _initPromise: Promise<Cluster> | null = null;
+const gCb = globalThis as typeof globalThis & { _cbInitPromise?: Promise<Cluster> | null };
+
+function getInitPromise(): Promise<Cluster> | null | undefined {
+  return gCb._cbInitPromise;
+}
+function setInitPromise(p: Promise<Cluster> | null) {
+  gCb._cbInitPromise = p;
+}
 
 async function initCluster(): Promise<Cluster> {
   const url = process.env.COUCHBASE_URL ?? 'couchbase://localhost';
@@ -93,13 +101,15 @@ async function initCluster(): Promise<Cluster> {
 }
 
 function getCluster(): Promise<Cluster> {
-  if (!_initPromise) {
-    _initPromise = initCluster().catch((err) => {
-      _initPromise = null; // reset so we retry on next call
-      throw err;
-    });
+  if (!getInitPromise()) {
+    setInitPromise(
+      initCluster().catch((err) => {
+        setInitPromise(null); // reset so we retry on next call
+        throw err;
+      })
+    );
   }
-  return _initPromise;
+  return getInitPromise()!;
 }
 
 // ─────────────────────────────────────────────

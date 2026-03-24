@@ -8,6 +8,7 @@ interface Props {
   industryColor: string;
   state: AgentState;
   dailyTarget: number;
+  personaCount?: number;
 }
 
 const PHASE_LABEL: Record<AgentPhase, string> = {
@@ -60,6 +61,7 @@ export default function AgentStatusCard({
   industryColor,
   state,
   dailyTarget,
+  personaCount,
 }: Props) {
   const progressPct =
     dailyTarget > 0 ? Math.min(100, Math.round((state.eventsSentToday / dailyTarget) * 100)) : 0;
@@ -99,6 +101,26 @@ export default function AgentStatusCard({
           {PHASE_LABEL[state.phase]}
         </span>
       </div>
+
+      {/* No-personas warning */}
+      {personaCount === 0 && (
+        <div className="flex items-center gap-1.5 bg-amber-900/20 border border-amber-800/40 rounded-lg px-2.5 py-1.5">
+          <svg className="w-3 h-3 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <span className="text-[10px] text-amber-400">No personas — add some in Industries tab</span>
+        </div>
+      )}
+      {personaCount !== undefined && personaCount > 0 && !state.currentPersonaName && (
+        <div className="flex items-center gap-1.5">
+          <svg className="w-3 h-3 text-slate-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          <span className="text-[10px] text-slate-600">{personaCount} persona{personaCount !== 1 ? 's' : ''} ready</span>
+        </div>
+      )}
 
       {/* Current persona + query */}
       {state.currentPersonaName && (

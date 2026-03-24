@@ -40,9 +40,17 @@ import { guardrailsAgent, GUARDRAIL_MAX_RETRIES } from './GuardrailsAgent';
 
 // ─────────────────────────────────────────────
 // In-memory per-industry agent state
+// Stored on globalThis so it survives Next.js hot reloads and
+// is shared across all module compilations in the same process.
 // ─────────────────────────────────────────────
 
-const agentStates = new Map<string, AgentState>();
+type AgentGlobal = typeof globalThis & {
+  _agentStates?: Map<string, AgentState>;
+  _industryAgent?: IndustryAgent;
+};
+const gAgent = globalThis as AgentGlobal;
+if (!gAgent._agentStates) gAgent._agentStates = new Map<string, AgentState>();
+const agentStates = gAgent._agentStates;
 
 function getOrCreateState(industryId: string): AgentState {
   if (!agentStates.has(industryId)) {
@@ -446,6 +454,5 @@ export class IndustryAgent {
 }
 
 // Singleton — shared, stateless per call; state is in the agentStates Map above
-const g = globalThis as typeof globalThis & { _industryAgent?: IndustryAgent };
-if (!g._industryAgent) g._industryAgent = new IndustryAgent();
-export const industryAgent = g._industryAgent;
+if (!gAgent._industryAgent) gAgent._industryAgent = new IndustryAgent();
+export const industryAgent = gAgent._industryAgent;

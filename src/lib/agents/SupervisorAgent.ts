@@ -15,9 +15,9 @@
  */
 
 import cron from 'node-cron';
-import type { IndustryV2, Persona, SupervisorDecision, SupervisorUrgency } from '@/types';
+import type { SupervisorDecision, SupervisorUrgency } from '@/types';
 import { emitToIndustry } from '@/lib/sse';
-import { getAllIndustries, getEventLimit } from '@/lib/industries';
+import { getAllIndustries, getPersonas, getEventLimit } from '@/lib/industries';
 import { getTodayCounters, resetCountersIfNewDay } from '@/lib/db';
 import { appendSupervisorDecision } from '@/lib/agentDb';
 import { industryAgent } from './IndustryAgent';
@@ -118,10 +118,11 @@ function calcUrgency(
 // Supervisor tick
 // ─────────────────────────────────────────────
 
-async function supervisorTick(personasByIndustry: Record<string, Persona[]>): Promise<void> {
+async function supervisorTick(): Promise<void> {
   supervisorState.lastRunAt = new Date().toISOString();
   console.log('[Supervisor] Tick — assessing industry progress...');
 
+  // Reload personas fresh on every tick so new personas are picked up automatically
   const industries = await getAllIndustries();
   const eventLimit = getEventLimit();
   const intervalMs = parseInt(
@@ -134,11 +135,8 @@ async function supervisorTick(personasByIndustry: Record<string, Persona[]>): Pr
   const fractionOfDayElapsed = minutesOfDay / 1440;
 
   for (const industry of industries) {
-    const personas = personasByIndustry[industry.id] ?? [];
-    if (personas.length === 0) {
-      console.log(`[Supervisor:${industry.id}] No personas loaded — skipping`);
-      continue;
-    }
+    // Load personas fresh each tick — picks up new personas without restart
+    const personas = await getPersonas(industry);
 
     await resetCountersIfNewDay(industry.id);
     const counters = await getTodayCounters(industry.id);
@@ -148,6 +146,29 @@ async function supervisorTick(personasByIndustry: Record<string, Persona[]>): Pr
     const dailyTarget = eventLimit * Math.max(1, activeIndices.length);
     const eventsRemaining = Math.max(0, dailyTarget - eventsSent);
     const percentComplete = dailyTarget > 0 ? eventsSent / dailyTarget : 0;
+
+    // If no personas configured, emit a visible "blocked" decision
+    if (personas.length === 0) {
+      const decision: SupervisorDecision = {
+        id: generateId(),
+        timestamp: new Date().toISOString(),
+        industryId: industry.id,
+        industryName: industry.name,
+        urgency: 'normal',
+        sessionsDispatched: 0,
+        reasoning: '⚠ No personas configured — add personas in the Industries tab to enable autonomous generation.',
+        progressSnapshot: {
+          sent: eventsSent,
+          target: dailyTarget,
+          percentComplete: Math.round(percentComplete * 100),
+        },
+      };
+      supervisorState.recentDecisions = [decision, ...supervisorState.recentDecisions].slice(0, 50);
+      emitToIndustry('_supervisor', 'supervisor', decision);
+      appendSupervisorDecision(decision).catch(console.error);
+      console.log(`[Supervisor:${industry.id}] No personas configured — skipping`);
+      continue;
+    }
 
     const { urgency, sessionsToDispatch, reasoning } = calcUrgency(
       percentComplete,
@@ -163,7 +184,7 @@ async function supervisorTick(personasByIndustry: Record<string, Persona[]>): Pr
       industryName: industry.name,
       urgency,
       sessionsDispatched: sessionsToDispatch,
-      reasoning,
+      reasoning: `${personas.length} persona${personas.length !== 1 ? 's' : ''} · ${reasoning}`,
       progressSnapshot: {
         sent: eventsSent,
         target: dailyTarget,
@@ -182,14 +203,14 @@ async function supervisorTick(personasByIndustry: Record<string, Persona[]>): Pr
     console.log(
       `[Supervisor:${industry.id}] ${urgency.toUpperCase()} — ` +
       `${eventsSent}/${dailyTarget} events (${Math.round(percentComplete * 100)}%) ` +
-      `→ dispatching ${sessionsToDispatch} sessions`
+      `→ dispatching ${sessionsToDispatch} sessions (${personas.length} personas)`
     );
 
     if (sessionsToDispatch > 0) {
       // Fire and forget — agent runs are async; supervisor moves on to next industry
       industryAgent
         .runBatch(personas, industry, sessionsToDispatch)
-        .catch((err) => {
+        .catch((err: unknown) => {
           console.error(`[Supervisor] Batch error for ${industry.id}:`, err);
         });
     }
@@ -200,7 +221,7 @@ async function supervisorTick(personasByIndustry: Record<string, Persona[]>): Pr
 // Public lifecycle API
 // ─────────────────────────────────────────────
 
-export function startSupervisor(personasByIndustry: Record<string, Persona[]>): void {
+export function startSupervisor(): void {
   if (supervisorState.isRunning) return;
 
   const intervalMs = parseInt(
@@ -211,7 +232,7 @@ export function startSupervisor(personasByIndustry: Record<string, Persona[]>): 
   const cronExpr = `*/${intervalMinutes} * * * *`;
 
   supervisorState.task = cron.schedule(cronExpr, () => {
-    supervisorTick(personasByIndustry).catch(console.error);
+    supervisorTick().catch(console.error);
   });
 
   supervisorState.isRunning = true;
@@ -224,7 +245,12 @@ export function startSupervisor(personasByIndustry: Record<string, Persona[]>): 
   });
 
   // Run first assessment immediately without waiting for the first cron tick
-  supervisorTick(personasByIndustry).catch(console.error);
+  supervisorTick().catch(console.error);
+}
+
+/** Force an immediate supervisor assessment (for manual trigger / debugging). */
+export function runSupervisorTickNow(): void {
+  supervisorTick().catch(console.error);
 }
 
 export function stopSupervisor(): void {

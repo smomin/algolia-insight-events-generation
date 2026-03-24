@@ -372,6 +372,8 @@ export default function Home() {
           <AgentDashboard
             industries={industries}
             eventLimit={eventLimit}
+            appStatus={appStatus}
+            onOpenSettings={() => setAppConfigOpen(true)}
           />
         )}
 
