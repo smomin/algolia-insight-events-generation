@@ -15,10 +15,16 @@ import {
   getNextRunTimeForIndustry,
 } from '@/lib/scheduler';
 import { getAllIndustries, getEventLimit } from '@/lib/industries';
+import { getAgentStateForIndustry } from '@/lib/agents/IndustryAgent';
+import { getSupervisorStatus } from '@/lib/agents/SupervisorAgent';
+import { getGuardrailViolations } from '@/lib/agentDb';
 
 export const dynamic = 'force-dynamic';
 
-const VALID_TYPES = new Set<string>(['status', 'session', 'event-log', 'counters']);
+const VALID_TYPES = new Set<string>([
+  'status', 'session', 'event-log', 'counters',
+  'agent-status', 'guardrail', 'supervisor',
+]);
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -118,10 +124,35 @@ export async function GET(req: NextRequest) {
         // DB unavailable on connect — client will retry via EventSource reconnect
       }
 
+      // ── Agent initial snapshots ──────────────────────────────────────
+      if (industryId && industryId !== '_global' && industryId !== '_supervisor') {
+        if (types.includes('agent-status')) {
+          const agentState = getAgentStateForIndustry(industryId);
+          send('agent-status', agentState);
+        }
+        if (types.includes('guardrail')) {
+          const violations = await getGuardrailViolations(industryId).catch(() => []);
+          send('guardrail', { violations, initial: true });
+        }
+      }
+      if (industryId === '_supervisor') {
+        const supStatus = getSupervisorStatus();
+        send('supervisor', { ...supStatus, type: 'snapshot' });
+      }
+
       // ── Subscribe to live updates ────────────────────────────────────
-      const channel = industryId === '_global' ? '_global' : industryId;
+      const channel =
+        industryId === '_global'
+          ? '_global'
+          : industryId === '_supervisor'
+          ? '_supervisor'
+          : industryId;
       const listenTypes: SSEEventType[] =
-        industryId === '_global' ? ['status'] : types;
+        industryId === '_global'
+          ? ['status']
+          : industryId === '_supervisor'
+          ? ['supervisor']
+          : types;
 
       unsubscribe = subscribeToStream(channel, listenTypes, (type, data) => {
         send(type, data);

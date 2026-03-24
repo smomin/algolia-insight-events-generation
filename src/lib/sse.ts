@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 
-export type SSEEventType = 'status' | 'session' | 'event-log' | 'counters';
+export type SSEEventType = 'status' | 'session' | 'event-log' | 'counters' | 'agent-status' | 'guardrail' | 'supervisor';
 
 // Persist emitter on globalThis so it survives Next.js hot reloads.
 // Without this, each hot reload creates a fresh emitter and active SSE

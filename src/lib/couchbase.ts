@@ -18,6 +18,7 @@
  *   eventLogs         — one doc per industry  (key = industryId)
  *   schedulerRuns     — one doc per industry  (key = industryId)
  *   sessions          — one doc per industry  (key = industryId)
+ *   agentData         — agent system: guardrail logs, supervisor decisions
  */
 
 import {
@@ -43,6 +44,7 @@ export const COLLECTIONS = [
   'eventLogs',
   'schedulerRuns',
   'sessions',
+  'agentData',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];

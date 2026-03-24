@@ -265,3 +265,75 @@ export interface IndustrySchedulerStatus {
 export interface AllSchedulerStatus {
   industries: Record<string, IndustrySchedulerStatus>;
 }
+
+// ─────────────────────────────────────────────
+// Agent system types
+// ─────────────────────────────────────────────
+
+export type AgentPhase =
+  | 'idle'
+  | 'planning'
+  | 'validating'
+  | 'searching'
+  | 'sending'
+  | 'complete'
+  | 'error';
+
+export interface AgentState {
+  industryId: string;
+  phase: AgentPhase;
+  currentPersonaId?: string;
+  currentPersonaName?: string;
+  currentQuery?: string;
+  sessionsCompleted: number;
+  sessionsTarget: number;
+  eventsSentToday: number;
+  dailyTarget: number;
+  guardrailViolations: number;
+  lastActivity: string;
+  errors: string[];
+  isActive: boolean;
+}
+
+export interface GuardrailResult {
+  approved: boolean;
+  reason: string;
+  suggestedQuery?: string;
+  industryId: string;
+  personaId: string;
+  personaName: string;
+  originalQuery: string;
+  finalQuery: string;
+  attemptNumber: number;
+  timestamp: string;
+}
+
+export type SupervisorUrgency = 'ahead' | 'normal' | 'high' | 'critical';
+
+export interface SupervisorDecision {
+  id: string;
+  timestamp: string;
+  industryId: string;
+  industryName: string;
+  urgency: SupervisorUrgency;
+  sessionsDispatched: number;
+  reasoning: string;
+  progressSnapshot: {
+    sent: number;
+    target: number;
+    percentComplete: number;
+  };
+}
+
+export interface AgentSystemStatus {
+  isActive: boolean;
+  startedAt?: string;
+  mode: 'supervisor' | 'off';
+  agents: Record<string, AgentState>;
+  recentDecisions: SupervisorDecision[];
+  supervisorStatus: {
+    isRunning: boolean;
+    startedAt?: string;
+    lastRunAt?: string;
+  };
+}

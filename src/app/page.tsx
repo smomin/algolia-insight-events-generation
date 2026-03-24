@@ -13,8 +13,11 @@ import IndustrySwitcher, {
 } from './components/IndustrySwitcher';
 import IndustryEditor from './components/IndustryEditor';
 import AppConfigPanel from './components/AppConfigPanel';
+import AgentDashboard from './components/AgentDashboard';
 import { useSSE } from './hooks/useSSE';
 import type { Persona, IndustryV2 } from '@/types';
+
+type MainView = 'industries' | 'agents';
 
 // ─────────────────────────────────────────────
 // Types
@@ -79,6 +82,7 @@ const DOT: Record<string, string> = {
 // ─────────────────────────────────────────────
 
 export default function Home() {
+  const [mainView, setMainView] = useState<MainView>('industries');
   const [industries, setIndustries] = useState<IndustryListItem[]>([]);
   const [personasByIndustry, setPersonasByIndustry] = useState<Record<string, Persona[]>>({});
   const [activeIndustry, setActiveIndustry] = useState<string>(
@@ -285,12 +289,41 @@ export default function Home() {
 
           {/* Global action buttons */}
           <div className="flex items-center gap-2 shrink-0">
-            {anyRunning && (
+            {anyRunning && mainView === 'industries' && (
               <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 {runningCount} running
               </span>
             )}
+
+            {/* View toggle */}
+            <div className="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-0.5">
+              <button
+                onClick={() => setMainView('industries')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                  mainView === 'industries'
+                    ? 'bg-slate-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Industries
+              </button>
+              <button
+                onClick={() => setMainView('agents')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${
+                  mainView === 'agents'
+                    ? 'bg-violet-600 text-white'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Agents
+              </button>
+            </div>
+
             {/* Settings gear */}
             <button
               onClick={() => setAppConfigOpen(true)}
@@ -303,34 +336,47 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
-            <button
-              onClick={() => setEditorTarget(null)}
-              className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1.5 rounded-lg font-medium transition-colors border border-slate-600 flex items-center gap-1.5"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
-              </svg>
-              New Industry
-            </button>
-            <button
-              onClick={handleStartAllSchedulers}
-              className="hidden sm:block text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-medium transition-colors"
-            >
-              Schedule All
-            </button>
-            <button
-              onClick={handleRunAllIndustries}
-              disabled={runningAllIndustries}
-              className="text-xs bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
-            >
-              {runningAllIndustries ? 'Triggering…' : '⚡ Run All'}
-            </button>
+            {mainView === 'industries' && (
+              <>
+                <button
+                  onClick={() => setEditorTarget(null)}
+                  className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-1.5 rounded-lg font-medium transition-colors border border-slate-600 flex items-center gap-1.5"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                  </svg>
+                  New Industry
+                </button>
+                <button
+                  onClick={handleStartAllSchedulers}
+                  className="hidden sm:block text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-medium transition-colors"
+                >
+                  Schedule All
+                </button>
+                <button
+                  onClick={handleRunAllIndustries}
+                  disabled={runningAllIndustries}
+                  className="text-xs bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
+                >
+                  {runningAllIndustries ? 'Triggering…' : '⚡ Run All'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>
 
       <main className="max-w-screen-2xl mx-auto px-6 py-6 space-y-5">
-        {/* ── Industry tab switcher ── */}
+        {/* ── Agent dashboard view ── */}
+        {mainView === 'agents' && (
+          <AgentDashboard
+            industries={industries}
+            eventLimit={eventLimit}
+          />
+        )}
+
+        {/* ── Industry tab switcher (only in industries view) ── */}
+        {mainView === 'industries' && (
         <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3">
           {industrySummaries.length > 0 ? (
             <IndustrySwitcher
@@ -343,8 +389,9 @@ export default function Home() {
             <div className="text-slate-500 text-sm px-2">Loading industries…</div>
           )}
         </div>
+        )}
 
-        {activeIndustryMeta && (
+        {mainView === 'industries' && activeIndustryMeta && (
           <>
             {/* ── Industry name banner ── */}
             <div className="flex items-center justify-between gap-4">
@@ -517,7 +564,7 @@ export default function Home() {
         )}
 
         {/* ── No industries loaded state ── */}
-        {industries.length === 0 && (
+        {mainView === 'industries' && industries.length === 0 && (
           <div className="text-center py-20">
             <p className="text-slate-400">Loading industry configurations…</p>
           </div>
