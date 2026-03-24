@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getIndustry, getPersonas, savePersonas } from '@/lib/industries';
 import { sampleIndex } from '@/lib/algolia';
 import { generatePersonasForIndustry, type IndexSample } from '@/lib/anthropic';
+import { getRawAppConfig } from '@/lib/appConfig';
 
 export async function POST(
   request: Request,
@@ -38,12 +39,18 @@ export async function POST(
     const existingPersonas = await getPersonas(industry);
     const existingNames = existingPersonas.map((p) => p.name);
 
-    // Ask Claude to generate personas
+    // Resolve the persona generation LLM provider override (if configured)
+    const appConfig = await getRawAppConfig();
+    const personaLlmProviderIdOverride = appConfig?.personaGenerationLlmProviderId;
+
+    // Ask the LLM to generate personas
     const generated = await generatePersonasForIndustry(
       industry.name,
       indexSamples,
       count,
-      existingNames
+      existingNames,
+      id,
+      personaLlmProviderIdOverride
     );
 
     // Tag each generated persona with the industry

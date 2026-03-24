@@ -38,6 +38,18 @@ export interface LLMProviderConfig {
 }
 
 // ─────────────────────────────────────────────
+// Algolia Application configuration
+// ─────────────────────────────────────────────
+
+/** A named Algolia application config — stored (with search key encrypted) in AppConfig */
+export interface AlgoliaAppConfig {
+  id: string;           // unique slug, e.g. "prod-us" or "staging"
+  name: string;         // display name, e.g. "Production (US)"
+  appId: string;        // Algolia Application ID
+  searchApiKey: string; // stored AES-256-GCM encrypted
+}
+
+// ─────────────────────────────────────────────
 // App-level configuration (stored encrypted in Couchbase)
 // ─────────────────────────────────────────────
 
@@ -50,8 +62,11 @@ export interface CredentialFields {
 /** Global app credentials — single document in the appConfig collection. */
 export interface AppConfig extends CredentialFields {
   updatedAt: string;
-  llmProviders?: LLMProviderConfig[];  // all configured LLM providers
-  defaultLlmProviderId?: string;       // provider to use when no industry override
+  llmProviders?: LLMProviderConfig[];          // all configured LLM providers
+  defaultLlmProviderId?: string;               // provider to use when no industry override
+  personaGenerationLlmProviderId?: string;     // provider used specifically for persona generation
+  algoliaApps?: AlgoliaAppConfig[];            // all configured Algolia applications
+  defaultAlgoliaAppId?: string;               // app to use when no industry override
 }
 
 /** Per-industry credential overrides — override global app config or env vars. */
@@ -70,7 +85,8 @@ export interface IndustryV2 {
     generateSecondaryQueries: string;
   };
   credentials?: IndustryCredentials; // optional per-industry credential overrides
-  llmProviderId?: string;     // override app-level default provider for this industry
+  llmProviderId?: string;       // override app-level default LLM provider for this industry
+  algoliaAppConfigId?: string;  // override app-level default Algolia app for this industry
   isBuiltIn: boolean;          // built-in industries cannot be deleted
   createdAt: string;
   updatedAt: string;

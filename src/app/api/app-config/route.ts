@@ -4,7 +4,7 @@ import {
   getCredentialStatus,
   saveAppConfig,
 } from '@/lib/appConfig';
-import type { CredentialFields, LLMProviderConfig } from '@/types';
+import type { AlgoliaAppConfig, CredentialFields, LLMProviderConfig } from '@/types';
 
 /**
  * GET /api/app-config
@@ -31,6 +31,9 @@ export async function PUT(request: Request) {
     const body = (await request.json()) as Partial<CredentialFields> & {
       llmProviders?: LLMProviderConfig[];
       defaultLlmProviderId?: string;
+      personaGenerationLlmProviderId?: string;
+      algoliaApps?: AlgoliaAppConfig[];
+      defaultAlgoliaAppId?: string;
     };
 
     const allowedCreds: (keyof CredentialFields)[] = [
@@ -41,6 +44,9 @@ export async function PUT(request: Request) {
     const filtered: Partial<CredentialFields> & {
       llmProviders?: LLMProviderConfig[];
       defaultLlmProviderId?: string;
+      personaGenerationLlmProviderId?: string;
+      algoliaApps?: AlgoliaAppConfig[];
+      defaultAlgoliaAppId?: string;
     } = {};
 
     for (const key of allowedCreds) {
@@ -55,6 +61,15 @@ export async function PUT(request: Request) {
     }
     if ('defaultLlmProviderId' in body) {
       filtered.defaultLlmProviderId = body.defaultLlmProviderId ?? '';
+    }
+    if ('personaGenerationLlmProviderId' in body) {
+      filtered.personaGenerationLlmProviderId = body.personaGenerationLlmProviderId ?? '';
+    }
+    if ('algoliaApps' in body) {
+      filtered.algoliaApps = body.algoliaApps;
+    }
+    if ('defaultAlgoliaAppId' in body) {
+      filtered.defaultAlgoliaAppId = body.defaultAlgoliaAppId ?? '';
     }
 
     await saveAppConfig(filtered);

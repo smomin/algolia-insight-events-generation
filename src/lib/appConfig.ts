@@ -14,7 +14,7 @@
 import { cbGet, cbUpsert } from './couchbase';
 import { encrypt, decrypt, isEncrypted } from './crypto';
 import { getIndustryConfig } from './db';
-import type { AppConfig, CredentialFields, LLMProviderConfig } from '@/types';
+import type { AppConfig, AlgoliaAppConfig, CredentialFields, LLMProviderConfig } from '@/types';
 
 const CONFIG_KEY = '_config';
 
@@ -77,6 +77,32 @@ function decryptProviders(providers: LLMProviderConfig[]): LLMProviderConfig[] {
 }
 
 // ─────────────────────────────────────────────
+// Storage helpers — Algolia app search keys
+// ─────────────────────────────────────────────
+
+function encryptAlgoliaApps(apps: AlgoliaAppConfig[]): AlgoliaAppConfig[] {
+  return apps.map((a) => {
+    if (a.searchApiKey && !isEncrypted(a.searchApiKey)) {
+      return { ...a, searchApiKey: encrypt(a.searchApiKey) };
+    }
+    return a;
+  });
+}
+
+function decryptAlgoliaApps(apps: AlgoliaAppConfig[]): AlgoliaAppConfig[] {
+  return apps.map((a) => {
+    if (a.searchApiKey && isEncrypted(a.searchApiKey)) {
+      try {
+        return { ...a, searchApiKey: decrypt(a.searchApiKey) };
+      } catch {
+        return { ...a, searchApiKey: '' };
+      }
+    }
+    return a;
+  });
+}
+
+// ─────────────────────────────────────────────
 // Public: App config CRUD
 // ─────────────────────────────────────────────
 
@@ -94,13 +120,16 @@ export async function saveAppConfig(
   incoming: Partial<CredentialFields> & {
     llmProviders?: LLMProviderConfig[];
     defaultLlmProviderId?: string;
+    personaGenerationLlmProviderId?: string;
+    algoliaApps?: AlgoliaAppConfig[];
+    defaultAlgoliaAppId?: string;
   }
 ): Promise<void> {
   const existing = (await getRawAppConfig()) ?? { updatedAt: '' };
 
   const merged: AppConfig = { ...existing, updatedAt: new Date().toISOString() };
 
-  // Merge Algolia credential fields
+  // Merge legacy Algolia credential fields
   for (const key of ['algoliaAppId', ...SENSITIVE] as (keyof CredentialFields)[]) {
     if (key in incoming) {
       const val = (incoming as Partial<Record<string, string>>)[key as string];
@@ -123,12 +152,35 @@ export async function saveAppConfig(
       merged.defaultLlmProviderId = incoming.defaultLlmProviderId;
     }
   }
+  if ('personaGenerationLlmProviderId' in incoming) {
+    if (incoming.personaGenerationLlmProviderId === '') {
+      delete merged.personaGenerationLlmProviderId;
+    } else if (incoming.personaGenerationLlmProviderId !== undefined) {
+      merged.personaGenerationLlmProviderId = incoming.personaGenerationLlmProviderId;
+    }
+  }
+
+  // Merge Algolia app fields
+  if ('algoliaApps' in incoming) {
+    merged.algoliaApps = incoming.algoliaApps;
+  }
+  if ('defaultAlgoliaAppId' in incoming) {
+    if (incoming.defaultAlgoliaAppId === '') {
+      delete merged.defaultAlgoliaAppId;
+    } else if (incoming.defaultAlgoliaAppId !== undefined) {
+      merged.defaultAlgoliaAppId = incoming.defaultAlgoliaAppId;
+    }
+  }
+
   const encryptedCreds = encryptFields(merged);
   const toStore: AppConfig = {
     ...encryptedCreds,
     updatedAt: merged.updatedAt,
     llmProviders: merged.llmProviders ? encryptProviders(merged.llmProviders) : undefined,
     defaultLlmProviderId: merged.defaultLlmProviderId,
+    personaGenerationLlmProviderId: merged.personaGenerationLlmProviderId,
+    algoliaApps: merged.algoliaApps ? encryptAlgoliaApps(merged.algoliaApps) : undefined,
+    defaultAlgoliaAppId: merged.defaultAlgoliaAppId,
   };
   await cbUpsert('appConfig', CONFIG_KEY, toStore);
 }
@@ -150,6 +202,13 @@ export interface ResolvedLLMProvider {
 /**
  * Returns fully resolved, decrypted Algolia credentials for a given industry
  * (or global if no industryId is given).
+ *
+ * Resolution order (highest → lowest priority):
+ *   1. Industry algoliaAppConfigId → named AlgoliaAppConfig
+ *   2. App-level defaultAlgoliaAppId → named AlgoliaAppConfig
+ *   3. Legacy: per-industry credentials override
+ *   4. Legacy: global AppConfig algoliaAppId / algoliaSearchApiKey
+ *   5. Environment variable fallback
  */
 export async function resolveCredentials(
   industryId?: string
@@ -158,13 +217,29 @@ export async function resolveCredentials(
   const app: CredentialFields = raw ? decryptFields(raw) : {};
 
   let ind: CredentialFields = {};
+  let industryAlgoliaAppConfigId: string | undefined;
   if (industryId) {
     const cfg = await getIndustryConfig(industryId);
     if (cfg?.credentials) {
       ind = decryptFields(cfg.credentials);
     }
+    industryAlgoliaAppConfigId = cfg?.algoliaAppConfigId;
   }
 
+  // Resolve via named algoliaApps list (new system)
+  const resolvedAppConfigId = industryAlgoliaAppConfigId ?? raw?.defaultAlgoliaAppId;
+  if (resolvedAppConfigId && raw?.algoliaApps?.length) {
+    const decryptedApps = decryptAlgoliaApps(raw.algoliaApps);
+    const algoliaApp = decryptedApps.find((a) => a.id === resolvedAppConfigId);
+    if (algoliaApp?.appId && algoliaApp?.searchApiKey) {
+      return {
+        algoliaAppId: algoliaApp.appId,
+        algoliaSearchApiKey: algoliaApp.searchApiKey,
+      };
+    }
+  }
+
+  // Fall back to legacy per-industry and global credential fields + env vars
   function pick(key: keyof CredentialFields, envVal: string | undefined): string {
     return ind[key] || app[key] || envVal || '';
   }
@@ -178,12 +253,14 @@ export async function resolveCredentials(
 /**
  * Resolves the LLM provider and model for a given industry.
  * Resolution order:
- *   1. Industry llmProviderId
- *   2. App-level defaultLlmProviderId
+ *   1. directProviderId (explicit override — bypasses industry lookup)
+ *   2. Industry llmProviderId
+ *   3. App-level defaultLlmProviderId
  * Model always comes from the resolved provider's defaultModel.
  */
 export async function resolveLLMProvider(
-  industryId?: string
+  industryId?: string,
+  directProviderId?: string
 ): Promise<ResolvedLLMProvider | null> {
   const raw = await getRawAppConfig();
   if (!raw) return null;
@@ -191,12 +268,12 @@ export async function resolveLLMProvider(
   const providers = raw.llmProviders ? decryptProviders(raw.llmProviders) : [];
 
   let industryProviderId: string | undefined;
-  if (industryId) {
+  if (!directProviderId && industryId) {
     const cfg = await getIndustryConfig(industryId);
     industryProviderId = cfg?.llmProviderId;
   }
 
-  const resolvedProviderId = industryProviderId || raw.defaultLlmProviderId;
+  const resolvedProviderId = directProviderId || industryProviderId || raw.defaultLlmProviderId;
 
   if (resolvedProviderId) {
     const provider = providers.find((p) => p.id === resolvedProviderId);
@@ -231,10 +308,20 @@ export interface LLMProviderStatus {
   defaultModel: string;
 }
 
+export interface AlgoliaAppStatus {
+  id: string;
+  name: string;
+  appId: string;
+  hasSearchApiKey: boolean;
+}
+
 export interface AppConfigStatus {
   credentials: CredentialStatus;
   llmProviders: LLMProviderStatus[];
   defaultLlmProviderId?: string;
+  personaGenerationLlmProviderId?: string;
+  algoliaApps: AlgoliaAppStatus[];
+  defaultAlgoliaAppId?: string;
 }
 
 export async function getCredentialStatus(
@@ -279,10 +366,21 @@ export async function getAppConfigStatus(): Promise<AppConfigStatus> {
     defaultModel: p.defaultModel,
   }));
 
+  const apps = raw?.algoliaApps ? decryptAlgoliaApps(raw.algoliaApps) : [];
+  const algoliaApps: AlgoliaAppStatus[] = apps.map((a) => ({
+    id: a.id,
+    name: a.name,
+    appId: a.appId,
+    hasSearchApiKey: !!a.searchApiKey,
+  }));
+
   return {
     credentials: credentialStatus,
     llmProviders,
     defaultLlmProviderId: raw?.defaultLlmProviderId,
+    personaGenerationLlmProviderId: raw?.personaGenerationLlmProviderId,
+    algoliaApps,
+    defaultAlgoliaAppId: raw?.defaultAlgoliaAppId,
   };
 }
 

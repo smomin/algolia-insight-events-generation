@@ -143,7 +143,8 @@ export async function generatePersonasForIndustry(
   indexSamples: IndexSample[],
   count: number,
   existingPersonaNames: string[],
-  industryId?: string
+  industryId?: string,
+  llmProviderIdOverride?: string
 ): Promise<Persona[]> {
   const indexContext = indexSamples.map(({ label, role, sampleRecords }) => {
     if (sampleRecords.length === 0) return null;
@@ -208,7 +209,7 @@ ${indexContext || 'No sample records available — generate plausible personas b
 
   const raw = await callLLM(
     [{ role: 'user', content: userMessage }],
-    { systemPrompt, maxTokens: 4000 },
+    { systemPrompt, maxTokens: 4000, providerIdOverride: llmProviderIdOverride },
     industryId
   );
 

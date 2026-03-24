@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import type { IndustryV2, FlexIndex, IndexEvent, AlgoliaEventType, AlgoliaEventSubtype, IndustryCredentials, LLMProviderType } from '@/types';
+import type { IndustryV2, FlexIndex, IndexEvent, AlgoliaEventType, AlgoliaEventSubtype, LLMProviderType } from '@/types';
 
 // ─────────────────────────────────────────────
 // Constants
@@ -69,16 +69,18 @@ interface IndexForm {
   events: EventRow[];
 }
 
-interface CredentialsForm {
-  algoliaAppId: string;
-  algoliaSearchApiKey: string;
-}
-
 interface LLMProviderOption {
   id: string;
   name: string;
   type: LLMProviderType;
   defaultModel: string;
+}
+
+interface AlgoliaAppOption {
+  id: string;
+  name: string;
+  appId: string;
+  hasSearchApiKey: boolean;
 }
 
 interface IndustryForm {
@@ -90,14 +92,9 @@ interface IndustryForm {
   promptSelect: string;
   promptSecondary: string;
   indices: IndexForm[];
-  credentials: CredentialsForm;
-  llmProviderId: string;  // '' = use app default
+  llmProviderId: string;        // '' = use app default
+  algoliaAppConfigId: string;   // '' = use app default
 }
-
-const EMPTY_CREDS: CredentialsForm = {
-  algoliaAppId: '',
-  algoliaSearchApiKey: '',
-};
 
 function uid() {
   return Math.random().toString(36).slice(2, 9);
@@ -130,14 +127,11 @@ function industryToForm(ind: IndustryV2): IndustryForm {
     name: ind.name,
     icon: ind.icon,
     color: ind.color,
-    credentials: {
-      algoliaAppId:        (ind.credentials?.algoliaAppId        ?? ''),
-      algoliaSearchApiKey: (ind.credentials?.algoliaSearchApiKey ? '••set••' : ''),
-    },
     promptPrimary: ind.claudePrompts.generatePrimaryQuery,
     promptSelect: ind.claudePrompts.selectBestResult,
     promptSecondary: ind.claudePrompts.generateSecondaryQueries,
     llmProviderId: ind.llmProviderId ?? '',
+    algoliaAppConfigId: ind.algoliaAppConfigId ?? '',
     indices: ind.indices.map((idx) => ({
       _key: uid(),
       id: idx.id,
@@ -154,34 +148,19 @@ function industryToForm(ind: IndustryV2): IndustryForm {
   };
 }
 
-function formToIndustry(form: IndustryForm, existing?: IndustryV2): Omit<IndustryV2, 'isBuiltIn' | 'createdAt' | 'updatedAt'> {
-  // Build credentials: only include fields that have a real (non-placeholder) value
-  const creds: IndustryCredentials = {};
-  const c = form.credentials;
-  if (c.algoliaAppId.trim() && !c.algoliaAppId.includes('••'))
-    creds.algoliaAppId = c.algoliaAppId.trim();
-  if (c.algoliaSearchApiKey.trim() && !c.algoliaSearchApiKey.includes('••'))
-    creds.algoliaSearchApiKey = c.algoliaSearchApiKey.trim();
-  // Preserve existing encrypted credentials that weren't changed (placeholder still shown)
-  const existingCreds = existing?.credentials ?? {};
-  const mergedCreds: IndustryCredentials = { ...existingCreds };
-  if ('algoliaAppId' in creds) mergedCreds.algoliaAppId = creds.algoliaAppId;
-  // For sensitive: if user typed a real value, override; if blank, clear; if placeholder, keep existing
-  if (c.algoliaSearchApiKey === '')       delete mergedCreds.algoliaSearchApiKey;
-  else if (!c.algoliaSearchApiKey.includes('••')) mergedCreds.algoliaSearchApiKey = creds.algoliaSearchApiKey;
-
+function formToIndustry(form: IndustryForm): Omit<IndustryV2, 'isBuiltIn' | 'createdAt' | 'updatedAt'> {
   return {
     id: form.id.trim().toLowerCase().replace(/\s+/g, '_'),
     name: form.name.trim(),
     icon: form.icon,
     color: form.color,
-    credentials: Object.keys(mergedCreds).length > 0 ? mergedCreds : undefined,
     claudePrompts: {
       generatePrimaryQuery: form.promptPrimary.trim() || DEFAULT_PROMPTS.generatePrimaryQuery,
       selectBestResult: form.promptSelect.trim() || DEFAULT_PROMPTS.selectBestResult,
       generateSecondaryQueries: form.promptSecondary.trim() || DEFAULT_PROMPTS.generateSecondaryQueries,
     },
     ...(form.llmProviderId ? { llmProviderId: form.llmProviderId } : {}),
+    ...(form.algoliaAppConfigId ? { algoliaAppConfigId: form.algoliaAppConfigId } : {}),
     indices: form.indices.map((idx) => ({
       id: idx.id.trim() || idx.label.trim().toLowerCase().replace(/\s+/g, '_') || uid(),
       label: idx.label.trim(),
@@ -404,21 +383,23 @@ const TYPE_ICONS: Record<LLMProviderType, string> = {
 export default function IndustryEditor({ industryId, onSaved, onClose }: IndustryEditorProps) {
   const isCreate = !industryId;
 
-  const [showCredentials, setShowCredentials] = useState(false);
   const [showLLM, setShowLLM] = useState(false);
+  const [showAlgoliaConfig, setShowAlgoliaConfig] = useState(false);
   const [availableProviders, setAvailableProviders] = useState<LLMProviderOption[]>([]);
   const [appDefaultProviderId, setAppDefaultProviderId] = useState<string>('');
+  const [availableAlgoliaApps, setAvailableAlgoliaApps] = useState<AlgoliaAppOption[]>([]);
+  const [appDefaultAlgoliaAppId, setAppDefaultAlgoliaAppId] = useState<string>('');
 
   const [form, setForm] = useState<IndustryForm>({
     id: '',
     name: '',
     icon: '🏭',
     color: 'blue',
-    credentials: EMPTY_CREDS,
     promptPrimary: DEFAULT_PROMPTS.generatePrimaryQuery,
     promptSelect: DEFAULT_PROMPTS.selectBestResult,
     promptSecondary: DEFAULT_PROMPTS.generateSecondaryQueries,
     llmProviderId: '',
+    algoliaAppConfigId: '',
     indices: [
       {
         _key: uid(),
@@ -441,16 +422,29 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
   const [showPrompts, setShowPrompts] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
 
-  // Load available LLM providers from app config
+  // Load available LLM providers and Algolia apps from app config
   useEffect(() => {
     fetch('/api/app-config')
       .then((r) => r.json())
-      .then((d: { appStatus?: { llmProviders?: LLMProviderOption[]; defaultLlmProviderId?: string } }) => {
+      .then((d: {
+        appStatus?: {
+          llmProviders?: LLMProviderOption[];
+          defaultLlmProviderId?: string;
+          algoliaApps?: AlgoliaAppOption[];
+          defaultAlgoliaAppId?: string;
+        };
+      }) => {
         if (d.appStatus?.llmProviders) {
           setAvailableProviders(d.appStatus.llmProviders);
         }
         if (d.appStatus?.defaultLlmProviderId) {
           setAppDefaultProviderId(d.appStatus.defaultLlmProviderId);
+        }
+        if (d.appStatus?.algoliaApps) {
+          setAvailableAlgoliaApps(d.appStatus.algoliaApps);
+        }
+        if (d.appStatus?.defaultAlgoliaAppId) {
+          setAppDefaultAlgoliaAppId(d.appStatus.defaultAlgoliaAppId);
         }
       })
       .catch(() => {/* non-critical */});
@@ -801,77 +795,73 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                 )}
               </section>
 
-              {/* ── Credential Overrides (collapsible) ── */}
+              {/* ── Algolia Configuration (collapsible) ── */}
               <section>
                 <button
-                  onClick={() => setShowCredentials((v) => !v)}
+                  onClick={() => setShowAlgoliaConfig((v) => !v)}
                   className="flex items-center gap-2 text-xs font-semibold text-gray-400 uppercase tracking-widest w-full"
                 >
                   <svg
-                    className={`w-3 h-3 transition-transform ${showCredentials ? 'rotate-90' : ''}`}
+                    className={`w-3 h-3 transition-transform ${showAlgoliaConfig ? 'rotate-90' : ''}`}
                     fill="none" viewBox="0 0 24 24" stroke="currentColor"
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
                   </svg>
-                  Credential Overrides
-                  <span className="text-gray-600 font-normal normal-case tracking-normal">(optional — overrides app-level settings)</span>
+                  Algolia Configuration
+                  {form.algoliaAppConfigId ? (
+                    <span className="text-[10px] font-normal normal-case tracking-normal text-blue-400 ml-1">
+                      (override set)
+                    </span>
+                  ) : (
+                    <span className="text-gray-600 font-normal normal-case tracking-normal">(using app default)</span>
+                  )}
                 </button>
 
-                {showCredentials && (
+                {showAlgoliaConfig && (
                   <div className="mt-3 space-y-3">
                     <p className="text-[11px] text-gray-500 bg-gray-800 rounded-lg p-2.5">
-                      Leave blank to use the global App Settings credentials. Enter a value to override for this industry only. Sensitive keys are encrypted before saving.
+                      Select a specific Algolia application for this industry. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
                     </p>
 
-                    {([
-                      { key: 'algoliaAppId' as const,        label: 'Algolia App ID',  secret: false, placeholder: 'e.g. ABCDE12345' },
-                      { key: 'algoliaSearchApiKey' as const,  label: 'Search API Key', secret: true,  placeholder: 'Leave blank to use global' },
-                    ]).map(({ key, label, secret, placeholder }) => {
-                      const val = form.credentials[key];
-                      const isPlaceholder = val.includes('••set••');
-                      return (
-                        <div key={key}>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="text-xs text-gray-400">{label}</label>
-                            {isPlaceholder && (
-                              <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full">override set</span>
-                            )}
-                          </div>
-                          <div className="flex gap-2">
-                            <input
-                              type={secret ? 'password' : 'text'}
-                              value={isPlaceholder ? '' : val}
-                              onChange={(e) =>
-                                setForm({
-                                  ...form,
-                                  credentials: { ...form.credentials, [key]: e.target.value },
-                                })
-                              }
-                              placeholder={isPlaceholder ? '••••••  (set — enter new value to change, or clear to remove)' : placeholder}
-                              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
-                            />
-                            {isPlaceholder && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setForm({
-                                    ...form,
-                                    credentials: { ...form.credentials, [key]: '' },
-                                  })
-                                }
-                                className="px-2 py-1 text-xs bg-red-900/40 hover:bg-red-900/60 text-red-400 rounded-lg transition-colors"
-                                title="Remove override"
-                              >
-                                ✕
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Algolia App</label>
+                      {availableAlgoliaApps.length === 0 ? (
+                        <p className="text-[11px] text-gray-600 bg-gray-800 rounded-lg p-2.5">
+                          No Algolia apps configured. Add apps in <span className="text-blue-400">App Settings → Algolia Apps</span>.
+                        </p>
+                      ) : (
+                        <select
+                          value={form.algoliaAppConfigId}
+                          onChange={(e) => setForm({ ...form, algoliaAppConfigId: e.target.value })}
+                          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+                        >
+                          <option value="">
+                            App Default{appDefaultAlgoliaAppId
+                              ? ` (${availableAlgoliaApps.find((a) => a.id === appDefaultAlgoliaAppId)?.name ?? appDefaultAlgoliaAppId})`
+                              : ' (not set)'}
+                          </option>
+                          {availableAlgoliaApps.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              🔍 {a.name} — {a.appId}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    {form.algoliaAppConfigId && (
+                      <button
+                        type="button"
+                        onClick={() => setForm({ ...form, algoliaAppConfigId: '' })}
+                        className="text-xs text-gray-600 hover:text-rose-400 transition-colors"
+                      >
+                        ✕ Reset to app default
+                      </button>
+                    )}
                   </div>
                 )}
               </section>
+
             </>
           )}
         </div>

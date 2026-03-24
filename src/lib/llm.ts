@@ -24,6 +24,8 @@ export interface LLMCallOptions {
   maxTokens?: number;
   /** Override the model for this specific call (over provider default). */
   modelOverride?: string;
+  /** Override the provider ID for this specific call (bypasses industry + default resolution). */
+  providerIdOverride?: string;
 }
 
 // ─────────────────────────────────────────────
@@ -43,7 +45,7 @@ export async function callLLM(
   options: LLMCallOptions = {},
   industryId?: string
 ): Promise<string> {
-  const resolved = await resolveLLMProvider(industryId);
+  const resolved = await resolveLLMProvider(industryId, options.providerIdOverride);
 
   if (!resolved) {
     throw new Error(
