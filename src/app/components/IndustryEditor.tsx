@@ -159,8 +159,8 @@ function formToIndustry(form: IndustryForm): Omit<IndustryV2, 'isBuiltIn' | 'cre
       selectBestResult: form.promptSelect.trim() || DEFAULT_PROMPTS.selectBestResult,
       generateSecondaryQueries: form.promptSecondary.trim() || DEFAULT_PROMPTS.generateSecondaryQueries,
     },
-    ...(form.llmProviderId ? { llmProviderId: form.llmProviderId } : {}),
-    ...(form.algoliaAppConfigId ? { algoliaAppConfigId: form.algoliaAppConfigId } : {}),
+    llmProviderId: form.llmProviderId || '',
+    algoliaAppConfigId: form.algoliaAppConfigId || '',
     indices: form.indices.map((idx) => ({
       id: idx.id.trim() || idx.label.trim().toLowerCase().replace(/\s+/g, '_') || uid(),
       label: idx.label.trim(),

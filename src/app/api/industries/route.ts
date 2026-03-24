@@ -67,6 +67,7 @@ export async function POST(request: Request) {
       },
       ...(body.credentials ? { credentials: body.credentials } : {}),
       ...(body.llmProviderId ? { llmProviderId: body.llmProviderId } : {}),
+      ...(body.algoliaAppConfigId ? { algoliaAppConfigId: body.algoliaAppConfigId } : {}),
     });
 
     return NextResponse.json({ industry }, { status: 201 });

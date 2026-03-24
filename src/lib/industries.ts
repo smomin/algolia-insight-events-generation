@@ -65,6 +65,11 @@ export async function updateIndustry(
     createdAt: existing.createdAt,
     updatedAt: new Date().toISOString(),
   };
+
+  // Clear optional override fields when sent as empty string (user reset to app default)
+  if (!updated.llmProviderId) delete updated.llmProviderId;
+  if (!updated.algoliaAppConfigId) delete updated.algoliaAppConfigId;
+
   await saveIndustryConfig(updated);
   return updated;
 }
