@@ -164,6 +164,13 @@ export async function runPersonaSession(
 
     console.log(`${tag} step 3/5 — selected hit[${selectedIdx}]: ${reason}`);
 
+    if (!selectedHit) {
+      const err = `Claude returned an out-of-range hit index (${selectedIdx}) for ${primaryHits.length} results`;
+      console.warn(`${tag} ${err}`);
+      await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
+      return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
+    }
+
     // ── 4. Build primary events ──
     const primaryEvts = buildFlexIndexEvents(
       persona,
@@ -299,7 +306,7 @@ export async function runPersonaSession(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`${tag} ✗ uncaught error:`, err);
-    await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, msg);
+    try { await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, msg); } catch { /* swallow so caller always gets a result */ }
     return { eventsByIndex: {}, totalEvents: 0, sessionId, error: msg };
   }
 }
@@ -397,60 +404,63 @@ export async function distributeSessionsForDay(
     sessionPersonas.push(shuffled[i % shuffled.length]);
   }
 
-  let sessionIndex = 0;
-  for (const persona of sessionPersonas) {
-    sessionIndex++;
+  try {
+    let sessionIndex = 0;
+    for (const persona of sessionPersonas) {
+      sessionIndex++;
 
-    // Check in-memory cancel flag
-    if (state.cancelRequested) {
-      console.log(`[${industry.id}] Distribution cancelled (in-memory) after ${run.sessionsCompleted} sessions`);
-      break;
-    }
-    // Every 5 sessions also check the persisted cancel flag (survives hot reloads)
-    if (sessionIndex % 5 === 0) {
-      const dist = await getDistributionState(industry.id);
-      if (dist.cancelRequested) {
-        console.log(`[${industry.id}] Distribution cancelled (persisted) after ${run.sessionsCompleted} sessions`);
-        state.cancelRequested = true;
+      // Check in-memory cancel flag
+      if (state.cancelRequested) {
+        console.log(`[${industry.id}] Distribution cancelled (in-memory) after ${run.sessionsCompleted} sessions`);
         break;
       }
-    }
-
-    // Check budget for all indices before each session
-    let canRun = true;
-    for (const idx of industry.indices) {
-      if (idx.events.length === 0) continue;
-      const remaining = await getRemainingBudget(industry.id, idx.id);
-      if (remaining < idx.events.length) { canRun = false; break; }
-    }
-    if (!canRun) break;
-
-    const result = await runPersonaSession(persona, industry);
-
-    if (result.error) {
-      run.errors.push(`${persona.name}: ${result.error}`);
-    } else {
-      run.sessionsCompleted++;
-      run.totalEventsSent += result.totalEvents;
-      for (const [indexId, count] of Object.entries(result.eventsByIndex)) {
-        run.eventsByIndex[indexId] = (run.eventsByIndex[indexId] ?? 0) + count;
+      // Every 5 sessions also check the persisted cancel flag (survives hot reloads)
+      if (sessionIndex % 5 === 0) {
+        const dist = await getDistributionState(industry.id);
+        if (dist.cancelRequested) {
+          console.log(`[${industry.id}] Distribution cancelled (persisted) after ${run.sessionsCompleted} sessions`);
+          state.cancelRequested = true;
+          break;
+        }
       }
+
+      // Check budget for all indices before each session
+      let canRun = true;
+      for (const idx of industry.indices) {
+        if (idx.events.length === 0) continue;
+        const remaining = await getRemainingBudget(industry.id, idx.id);
+        if (remaining < idx.events.length) { canRun = false; break; }
+      }
+      if (!canRun) break;
+
+      const result = await runPersonaSession(persona, industry);
+
+      if (result.error) {
+        run.errors.push(`${persona.name}: ${result.error}`);
+      } else {
+        run.sessionsCompleted++;
+        run.totalEventsSent += result.totalEvents;
+        for (const [indexId, count] of Object.entries(result.eventsByIndex)) {
+          run.eventsByIndex[indexId] = (run.eventsByIndex[indexId] ?? 0) + count;
+        }
+      }
+
+      // Push progress update so SchedulerControls shows live session count
+      emitStatus(industry.id);
+
+      await sleep(randomInt(500, 2000));
     }
 
-    // Push progress update so SchedulerControls shows live session count
-    emitStatus(industry.id);
-
-    await sleep(randomInt(500, 2000));
+    run.completedAt = new Date().toISOString();
+    try { await appendSchedulerRun(industry.id, run); } catch (e) { console.error(`[${industry.id}] Failed to persist run:`, e); }
+  } finally {
+    // Always clear distributing state so the UI is never left stuck
+    state.currentRun = null;
+    state.isDistributing = false;
+    state.cancelRequested = false;
+    try { await setDistributionActive(industry.id, run.id, false); } catch (e) { console.error(`[${industry.id}] Failed to clear distribution state:`, e); }
+    emitStatus(industry.id, { lastRun: run });
   }
-
-  run.completedAt = new Date().toISOString();
-  await appendSchedulerRun(industry.id, run);
-  state.currentRun = null;
-  state.isDistributing = false;
-  state.cancelRequested = false;
-  // Clear persisted active state so status is accurate after hot reload
-  await setDistributionActive(industry.id, run.id, false);
-  emitStatus(industry.id, { lastRun: run });
 
   console.log(
     `[${industry.id}] Distribution complete — ` +

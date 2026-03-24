@@ -141,9 +141,16 @@ export async function saveAppConfig(
     }
   }
 
-  // Merge LLM provider fields
+  // Merge LLM provider fields — preserve existing encrypted keys for providers sent without a key
   if ('llmProviders' in incoming) {
-    merged.llmProviders = incoming.llmProviders;
+    const existingProviders = existing.llmProviders ?? [];
+    merged.llmProviders = (incoming.llmProviders ?? []).map((p) => {
+      if (!p.apiKey) {
+        const stored = existingProviders.find((e) => e.id === p.id);
+        if (stored?.apiKey) return { ...p, apiKey: stored.apiKey };
+      }
+      return p;
+    });
   }
   if ('defaultLlmProviderId' in incoming) {
     if (incoming.defaultLlmProviderId === '') {
@@ -160,9 +167,16 @@ export async function saveAppConfig(
     }
   }
 
-  // Merge Algolia app fields
+  // Merge Algolia app fields — preserve existing encrypted keys for apps sent without a key
   if ('algoliaApps' in incoming) {
-    merged.algoliaApps = incoming.algoliaApps;
+    const existingApps = existing.algoliaApps ?? [];
+    merged.algoliaApps = (incoming.algoliaApps ?? []).map((a) => {
+      if (!a.searchApiKey) {
+        const stored = existingApps.find((e) => e.id === a.id);
+        if (stored?.searchApiKey) return { ...a, searchApiKey: stored.searchApiKey };
+      }
+      return a;
+    });
   }
   if ('defaultAlgoliaAppId' in incoming) {
     if (incoming.defaultAlgoliaAppId === '') {

@@ -76,10 +76,18 @@ export async function selectBestResult(
     industryId
   );
 
+  const cleaned = text
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
+
   try {
-    const parsed = JSON.parse(text) as { index: number; reason: string };
-    const idx = Math.max(0, Math.min(parsed.index, hits.length - 1));
-    return { index: idx, reason: parsed.reason };
+    const parsed = JSON.parse(cleaned) as { index: number; reason: string };
+    const rawIdx = typeof parsed === 'object' && parsed !== null ? parsed.index : undefined;
+    const numIdx = Number(rawIdx);
+    const idx = Number.isFinite(numIdx)
+      ? Math.max(0, Math.min(Math.floor(numIdx), hits.length - 1))
+      : 0;
+    return { index: idx, reason: parsed?.reason ?? 'Auto-selected result' };
   } catch {
     return { index: 0, reason: 'Auto-selected first result' };
   }
