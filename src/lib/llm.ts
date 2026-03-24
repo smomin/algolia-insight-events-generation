@@ -56,6 +56,11 @@ export async function callLLM(
   const { provider, model } = resolved;
   const effectiveModel = options.modelOverride || model;
 
+  const providerTag = provider.baseUrl
+    ? `${provider.type}/${effectiveModel} @ ${provider.baseUrl}`
+    : `${provider.type}/${effectiveModel}`;
+  console.log(`[LLM] ${providerTag}`);
+
   switch (provider.type) {
     case 'anthropic':
       return callAnthropic(provider.apiKey!, effectiveModel, messages, options);

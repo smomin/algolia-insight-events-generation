@@ -21,12 +21,15 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const cancelOnly = body.cancelOnly === true;
     const id = industryId ?? process.env.DEFAULT_INDUSTRY_ID ?? 'grocery';
-    stopScheduler(id);
+
+    if (!cancelOnly) stopScheduler(id);
     await cancelDistribution(id);
 
     return NextResponse.json({
-      stopped: true,
+      stopped: !cancelOnly,
+      cancelOnly,
       industryId: id,
       running: isSchedulerRunning(id),
       distributing: isDistributing(id),

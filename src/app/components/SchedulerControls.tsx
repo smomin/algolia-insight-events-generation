@@ -133,7 +133,7 @@ export default function SchedulerControls({
   const handleStopRun = async () => {
     setLoading(true);
     try {
-      await apiFetch('/api/scheduler/stop', { industryId });
+      await apiFetch('/api/scheduler/stop', { industryId, cancelOnly: true });
     } finally {
       setLoading(false);
     }
@@ -270,7 +270,7 @@ export default function SchedulerControls({
         ) : (
           <button
             onClick={() => post({ runNow: true })}
-            disabled={loading || isActive}
+            disabled={loading || status.isDistributing}
             className="col-span-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
           >
             Trigger Now
@@ -279,7 +279,7 @@ export default function SchedulerControls({
 
         <button
           onClick={handleRunAllPersonas}
-          disabled={loading || isActive}
+          disabled={loading || status.isDistributing}
           className="col-span-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
         >
           Run All Personas

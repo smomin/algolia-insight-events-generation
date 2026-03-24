@@ -6,6 +6,7 @@ import {
   getSessions,
   getDistributionState,
   getLastSchedulerRun,
+  setDistributionActive,
 } from '@/lib/db';
 import {
   isSchedulerRunning,
@@ -52,9 +53,16 @@ export async function GET(req: NextRequest) {
           await Promise.all(
             industries.map(async (ind) => {
               const distState = await getDistributionState(ind.id);
+              const inMemDist = isDistributing(ind.id);
+              // Auto-heal stale persisted state (same logic as per-industry snapshot)
+              let actualDist = inMemDist || distState.isDistributing;
+              if (!inMemDist && (distState.isDistributing || distState.cancelRequested)) {
+                await setDistributionActive(ind.id, distState.runId ?? 'stale', false);
+                actualDist = false;
+              }
               all[ind.id] = {
                 isRunning: isSchedulerRunning(ind.id),
-                isDistributing: isDistributing(ind.id) || distState.isDistributing,
+                isDistributing: actualDist,
               };
             })
           );
@@ -67,12 +75,25 @@ export async function GET(req: NextRequest) {
                 getLastSchedulerRun(industryId),
                 getDistributionState(industryId),
               ]);
-              const distributing = isDistributing(industryId) || distState.isDistributing;
+              const inMemDistributing = isDistributing(industryId);
+
+              // Auto-heal stale persisted state: if in-memory says the distribution
+              // is NOT running but Couchbase still claims it is (or has a dangling
+              // cancelRequested flag), the run ended uncleanly (hot-reload / crash).
+              // Clear the stale record so clients never get stuck in "Stopping…".
+              let actuallyDistributing = inMemDistributing || distState.isDistributing;
+              let cancelRequested = distState.cancelRequested;
+              if (!inMemDistributing && (distState.isDistributing || distState.cancelRequested)) {
+                await setDistributionActive(industryId, distState.runId ?? 'stale', false);
+                actuallyDistributing = false;
+                cancelRequested = false;
+              }
+
               const current = getCurrentRun(industryId);
               send('status', {
                 isRunning: isSchedulerRunning(industryId),
-                isDistributing: distributing,
-                cancelRequested: distState.cancelRequested,
+                isDistributing: actuallyDistributing,
+                cancelRequested,
                 nextRun: getNextRunTimeForIndustry(industryId),
                 lastRun,
                 currentRun: current

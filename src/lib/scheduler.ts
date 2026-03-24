@@ -124,8 +124,8 @@ export async function runPersonaSession(
   console.log(`${tag} session started (${sessionId})`);
 
   try {
-    // ── 1. Generate primary search query via Claude ──
-    console.log(`${tag} step 1/5 — generating primary query via Claude`);
+    // ── 1. Generate primary search query via LLM ──
+    console.log(`${tag} step 1/5 — generating primary query via LLM`);
     const primaryQuery = await generatePrimaryQuery(
       persona,
       industry.claudePrompts.generatePrimaryQuery,
@@ -151,8 +151,8 @@ export async function runPersonaSession(
     }
     console.log(`${tag} step 2/5 — got ${primaryHits.length} hits (queryID: ${primaryQueryID})`);
 
-    // ── 3. Claude selects best result ──
-    console.log(`${tag} step 3/5 — Claude selecting best result`);
+    // ── 3. LLM selects best result ──
+    console.log(`${tag} step 3/5 — LLM selecting best result`);
     const { index: selectedIdx, reason } = await selectBestResult(
       persona,
       primaryHits,
@@ -362,6 +362,7 @@ export async function distributeSessionsForDay(
   }
 
   state.isDistributing = true;
+  state.cancelRequested = false; // clear any stale cancel from a previous stop
   await resetCountersIfNewDay(industry.id);
   emitStatus(industry.id, { lastRun: null });
 
