@@ -57,6 +57,8 @@ interface AlgoliaAppDraft {
 
 interface AppConfigPanelProps {
   onClose: () => void;
+  /** If provided, the panel renders immediately with this data instead of waiting for its own fetch. */
+  initialStatus?: Partial<AppConfigStatus> | null;
 }
 
 // ─────────────────────────────────────────────
@@ -555,8 +557,23 @@ function emptyAlgoliaAppDraft(): AlgoliaAppDraft {
   return { id: uid(), name: '', appId: '', searchApiKey: '' };
 }
 
-export default function AppConfigPanel({ onClose }: AppConfigPanelProps) {
-  const [appStatus, setAppStatus] = useState<AppConfigStatus | null>(null);
+export default function AppConfigPanel({ onClose, initialStatus }: AppConfigPanelProps) {
+  // Coerce the partial initialStatus into a full AppConfigStatus shape if provided
+  const seedStatus: AppConfigStatus | null = initialStatus
+    ? {
+        credentials: initialStatus.credentials ?? { algoliaAppId: { value: '', source: 'none' }, algoliaSearchApiKey: { isSet: false, source: 'none' } },
+        llmProviders: initialStatus.llmProviders ?? [],
+        algoliaApps: initialStatus.algoliaApps ?? [],
+        defaultLlmProviderId: initialStatus.defaultLlmProviderId,
+        defaultAlgoliaAppId: initialStatus.defaultAlgoliaAppId,
+        personaGenerationLlmProviderId: initialStatus.personaGenerationLlmProviderId,
+      }
+    : null;
+
+  const [appStatus, setAppStatus] = useState<AppConfigStatus | null>(seedStatus);
+  // If initialStatus was provided we can render immediately; still do a background refresh.
+  const [loading, setLoading] = useState(!initialStatus);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -572,15 +589,31 @@ export default function AppConfigPanel({ onClose }: AppConfigPanelProps) {
 
   const panelRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  const fetchStatus = (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
+    setLoadError(null);
     fetch('/api/app-config')
       .then((r) => r.json())
-      .then((d: { status: CredentialStatus; appStatus?: AppConfigStatus }) => {
+      .then((d: { status: CredentialStatus; appStatus?: AppConfigStatus; error?: string }) => {
+        if (d.error) throw new Error(d.error);
         const status = d.appStatus ?? { credentials: d.status, llmProviders: [], algoliaApps: [] };
         setAppStatus(status);
       })
-      .catch(console.error);
-  }, []);
+      .catch((err: unknown) => {
+        // Only surface the error if we were showing a spinner (i.e. no initial data)
+        if (showSpinner) {
+          setLoadError(err instanceof Error ? err.message : 'Failed to load settings');
+        }
+        console.error('[AppConfigPanel] load error:', err);
+      })
+      .finally(() => { if (showSpinner) setLoading(false); });
+  };
+
+  useEffect(() => {
+    // If we already have data from the parent, do a silent background refresh.
+    // Otherwise show the spinner and wait.
+    fetchStatus(!initialStatus);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -881,7 +914,35 @@ export default function AppConfigPanel({ onClose }: AppConfigPanelProps) {
             </p>
           </div>
 
-          {/* ── Algolia Apps section ─────────────────── */}
+          {/* Loading state */}
+          {loading && (
+            <div className="flex flex-col items-center justify-center py-10 gap-3">
+              <span className="w-6 h-6 border-2 border-slate-600 border-t-blue-400 rounded-full animate-spin" />
+              <p className="text-xs text-slate-500">Loading settings…</p>
+            </div>
+          )}
+
+          {/* Error state */}
+          {!loading && loadError && (
+            <div className="flex items-start gap-3 bg-rose-900/20 border border-rose-800/50 rounded-xl p-3">
+              <svg className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs text-rose-300 font-medium">Failed to load settings</p>
+                <p className="text-[11px] text-rose-400/70 mt-0.5 break-all">{loadError}</p>
+              </div>
+              <button
+                onClick={() => fetchStatus(true)}
+                className="shrink-0 text-xs text-rose-400 hover:text-rose-200 underline"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {/* ── Algolia Apps + LLM Providers (hidden while loading) ─── */}
+          {!loading && !loadError && (<>
           <section className="space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
@@ -1074,6 +1135,7 @@ export default function AppConfigPanel({ onClose }: AppConfigPanelProps) {
             )}
 
           </section>
+          </>) /* end !loading && !loadError */}
 
           {/* Feedback */}
           {saveMsg && (

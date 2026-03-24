@@ -52,7 +52,13 @@ interface LLMProviderStatus {
   defaultModel: string;
 }
 
+interface CredentialStatus {
+  algoliaAppId:        { value: string;  source: 'db' | 'env' | 'none' };
+  algoliaSearchApiKey: { isSet: boolean; source: 'db' | 'env' | 'none' };
+}
+
 interface AppStatus {
+  credentials?: CredentialStatus;
   algoliaApps: AlgoliaAppStatus[];
   defaultAlgoliaAppId?: string;
   llmProviders: LLMProviderStatus[];
@@ -576,6 +582,8 @@ export default function Home() {
       {/* ── Industry Editor (create / edit) ── */}
       {appConfigOpen && (
         <AppConfigPanel
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          initialStatus={(appStatus ?? undefined) as any}
           onClose={() => {
             setAppConfigOpen(false);
             fetch('/api/app-config')

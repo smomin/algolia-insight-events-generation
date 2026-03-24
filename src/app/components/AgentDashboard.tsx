@@ -22,7 +22,13 @@ interface LLMProviderStatus {
   defaultModel: string;
 }
 
+interface CredentialStatus {
+  algoliaAppId:        { value: string;  source: 'db' | 'env' | 'none' };
+  algoliaSearchApiKey: { isSet: boolean; source: 'db' | 'env' | 'none' };
+}
+
 interface AppStatus {
+  credentials?: CredentialStatus;
   algoliaApps: AlgoliaAppStatus[];
   defaultAlgoliaAppId?: string;
   llmProviders: LLMProviderStatus[];
@@ -32,8 +38,8 @@ interface AppStatus {
 interface Props {
   industries: Array<IndustryV2 & { personaCount: number }>;
   eventLimit: number;
-  appStatus?: AppStatus | null;
-  onOpenSettings?: () => void;
+  appStatus: AppStatus | null;
+  onOpenSettings: () => void;
 }
 
 interface SupervisorStatusPayload {
@@ -240,10 +246,23 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
     }
   };
 
-  // ── Resolved Algolia app + LLM provider (from appStatus defaults) ──
-  const resolvedAlgoliaApp = appStatus
-    ? appStatus.algoliaApps.find((a) => a.id === appStatus.defaultAlgoliaAppId) ?? appStatus.algoliaApps[0] ?? null
+  // ── Resolved Algolia app + LLM provider ───────────────────────────
+  // Primary: named algoliaApps list (new multi-app system).
+  // Fallback: legacy credentials field (env-var or db single-credential).
+  const resolvedAlgoliaApp: (AlgoliaAppStatus & { isLegacy?: boolean }) | null = appStatus
+    ? (appStatus.algoliaApps.find((a) => a.id === appStatus.defaultAlgoliaAppId)
+        ?? appStatus.algoliaApps[0]
+        ?? (appStatus.credentials?.algoliaAppId?.value
+            ? {
+                id: 'legacy',
+                name: appStatus.credentials.algoliaAppId.source === 'env' ? 'Env var' : 'Legacy credential',
+                appId: appStatus.credentials.algoliaAppId.value,
+                hasSearchApiKey: appStatus.credentials.algoliaSearchApiKey.isSet,
+                isLegacy: true,
+              }
+            : null))
     : null;
+
   const resolvedLLM = appStatus
     ? appStatus.llmProviders.find((p) => p.id === appStatus.defaultLlmProviderId) ?? appStatus.llmProviders[0] ?? null
     : null;
@@ -403,50 +422,65 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
         {/* App settings row */}
         <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            {resolvedAlgoliaApp ? (
-              <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
-                <svg className="w-2.5 h-2.5 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
-                </svg>
-                <span className="text-blue-300 font-medium">{resolvedAlgoliaApp.name}</span>
-                <span className="text-slate-600">·</span>
-                <span className="font-mono text-slate-500">{resolvedAlgoliaApp.appId}</span>
-                {!resolvedAlgoliaApp.hasSearchApiKey && (
-                  <span className="ml-0.5 text-rose-400 italic">no key</span>
-                )}
-              </span>
+            {appStatus === null ? (
+              /* Loading skeleton */
+              <>
+                <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700/50 text-slate-600 px-2 py-0.5 rounded-full animate-pulse">
+                  Loading…
+                </span>
+              </>
             ) : (
-              <span className="inline-flex items-center gap-1 text-[10px] bg-rose-900/20 border border-rose-800/50 text-rose-400 px-2 py-0.5 rounded-full">
-                <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                No Algolia app configured
-              </span>
-            )}
+              <>
+                {resolvedAlgoliaApp ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
+                    <svg className="w-2.5 h-2.5 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+                    </svg>
+                    <span className="text-blue-300 font-medium">{resolvedAlgoliaApp.name}</span>
+                    <span className="text-slate-600">·</span>
+                    <span className="font-mono text-slate-500">{resolvedAlgoliaApp.appId}</span>
+                    {resolvedAlgoliaApp.isLegacy && (
+                      <span className="ml-0.5 text-slate-600 italic">env</span>
+                    )}
+                    {!resolvedAlgoliaApp.hasSearchApiKey && (
+                      <span className="ml-0.5 text-rose-400 italic">no key</span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] bg-rose-900/20 border border-rose-800/50 text-rose-400 px-2 py-0.5 rounded-full">
+                    <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    No Algolia app — add one in App Settings
+                  </span>
+                )}
 
-            {resolvedLLM ? (
-              <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
-                <svg className="w-2.5 h-2.5 text-violet-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
-                </svg>
-                <span className="text-violet-300 font-medium">{resolvedLLM.name}</span>
-                <span className="text-slate-600">·</span>
-                <span className="font-mono text-slate-500">{resolvedLLM.defaultModel}</span>
-                {!resolvedLLM.hasApiKey && (
-                  <span className="ml-0.5 text-rose-400 italic">no key</span>
+                {resolvedLLM ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
+                    <svg className="w-2.5 h-2.5 text-violet-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+                    </svg>
+                    <span className="text-violet-300 font-medium">{resolvedLLM.name}</span>
+                    <span className="text-slate-600">·</span>
+                    <span className="font-mono text-slate-500">{resolvedLLM.defaultModel}</span>
+                    {!resolvedLLM.hasApiKey && (
+                      <span className="ml-0.5 text-rose-400 italic">no key</span>
+                    )}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] bg-rose-900/20 border border-rose-800/50 text-rose-400 px-2 py-0.5 rounded-full">
+                    <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    No LLM provider — add one in App Settings
+                  </span>
                 )}
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 text-[10px] bg-rose-900/20 border border-rose-800/50 text-rose-400 px-2 py-0.5 rounded-full">
-                <svg className="w-2.5 h-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                No LLM provider configured
-              </span>
+              </>
             )}
           </div>
 
           {onOpenSettings && (
+
             <button
               onClick={onOpenSettings}
               className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-500 px-2.5 py-1 rounded-lg transition-colors"
