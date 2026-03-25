@@ -204,3 +204,69 @@ export async function setDistributionCancelRequested(industryId: string): Promis
   const current = await getDistributionState(industryId);
   await cbUpsert('counters', `${industryId}_dist`, { ...current, cancelRequested: true });
 }
+
+// ─────────────────────────────────────────────
+// Persona query memory — per-persona search history
+// Persisted so agents never repeat the same queries across sessions.
+// ─────────────────────────────────────────────
+
+const MAX_PERSONA_MEMORY = 30;
+// Queries older than this many days are pruned to keep memory fresh.
+const MEMORY_MAX_AGE_DAYS = 14;
+
+interface PersonaMemoryEntry {
+  query: string;
+  timestamp: string; // ISO-8601
+}
+
+interface PersonaMemoryDoc {
+  entries: PersonaMemoryEntry[];
+}
+
+function memoryKey(industryId: string, personaId: string): string {
+  return `persona_mem_${industryId}_${personaId}`;
+}
+
+/**
+ * Returns the last N approved queries for a persona, newest-first.
+ * Prunes entries older than MEMORY_MAX_AGE_DAYS automatically.
+ */
+export async function getPersonaQueryMemory(
+  industryId: string,
+  personaId: string
+): Promise<string[]> {
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', memoryKey(industryId, personaId));
+  if (!doc?.entries?.length) return [];
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - MEMORY_MAX_AGE_DAYS);
+
+  return doc.entries
+    .filter((e) => new Date(e.timestamp) >= cutoff)
+    .map((e) => e.query);
+}
+
+/**
+ * Appends a successfully-approved query to the persona's memory, deduplicating
+ * and capping at MAX_PERSONA_MEMORY entries.
+ */
+export async function appendPersonaQuery(
+  industryId: string,
+  personaId: string,
+  query: string
+): Promise<void> {
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', memoryKey(industryId, personaId));
+  const existing = doc?.entries ?? [];
+
+  // Deduplicate: drop any existing entry for the exact same query string (case-insensitive)
+  const deduped = existing.filter(
+    (e) => e.query.toLowerCase() !== query.toLowerCase()
+  );
+
+  const updated: PersonaMemoryEntry[] = [
+    { query, timestamp: new Date().toISOString() },
+    ...deduped,
+  ].slice(0, MAX_PERSONA_MEMORY);
+
+  await cbUpsert('agentData', memoryKey(industryId, personaId), { entries: updated });
+}

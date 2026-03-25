@@ -34,4 +34,4 @@ yarn-error.log*
 next-env.d.ts
 
 # data (auto-generated at runtime)
-/data/db.json
+/data

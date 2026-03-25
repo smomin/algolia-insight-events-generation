@@ -9,10 +9,19 @@ import { callLLM } from './llm';
 export async function generatePrimaryQuery(
   persona: Persona,
   promptInstruction: string,
-  industryId?: string
+  industryId?: string,
+  recentQueries?: string[]
 ): Promise<string> {
+  let userContent = `Persona:\n${JSON.stringify(persona, null, 2)}`;
+
+  if (recentQueries && recentQueries.length > 0) {
+    userContent +=
+      `\n\nThis persona's recent searches (avoid repeating these or close variants — generate something distinctly different to ensure variety):\n` +
+      recentQueries.map((q) => `- "${q}"`).join('\n');
+  }
+
   return callLLM(
-    [{ role: 'user', content: `Persona:\n${JSON.stringify(persona, null, 2)}` }],
+    [{ role: 'user', content: userContent }],
     { systemPrompt: promptInstruction, maxTokens: 100 },
     industryId
   );

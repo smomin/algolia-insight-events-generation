@@ -337,3 +337,18 @@ export interface AgentSystemStatus {
     lastRunAt?: string;
   };
 }
+
+// ─────────────────────────────────────────────
+// Agent configuration (editable system prompts)
+// ─────────────────────────────────────────────
+
+export interface AgentPromptConfig {
+  systemPrompt: string;
+  updatedAt?: string;
+}
+
+export interface AgentConfigs {
+  supervisor: AgentPromptConfig;
+  guardrails: AgentPromptConfig;
+  industryAgent: AgentPromptConfig;
+}

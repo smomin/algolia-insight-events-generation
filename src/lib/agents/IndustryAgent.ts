@@ -35,6 +35,8 @@ import {
   appendEventLog,
   appendSession,
   getTodayCounters,
+  getPersonaQueryMemory,
+  appendPersonaQuery,
 } from '@/lib/db';
 import { guardrailsAgent, GUARDRAIL_MAX_RETRIES } from './GuardrailsAgent';
 
@@ -178,10 +180,17 @@ export class IndustryAgent {
       });
       console.log(`${tag} Phase: planning`);
 
+      // Load persona's query history so the LLM can avoid repetition
+      const recentQueries = await getPersonaQueryMemory(industry.id, persona.id).catch(() => []);
+      if (recentQueries.length > 0) {
+        console.log(`${tag} Memory: ${recentQueries.length} recent queries loaded for ${persona.name}`);
+      }
+
       let primaryQuery = await generatePrimaryQuery(
         persona,
         industry.claudePrompts.generatePrimaryQuery,
-        industry.id
+        industry.id,
+        recentQueries
       );
       console.log(`${tag} Generated query: "${primaryQuery}"`);
 
@@ -217,6 +226,11 @@ export class IndustryAgent {
         });
         console.log(`${tag} Guardrail retries exhausted — proceeding with: "${primaryQuery}"`);
       }
+
+      // Persist the approved query to persona memory so future sessions stay varied
+      appendPersonaQuery(industry.id, persona.id, primaryQuery).catch((err) =>
+        console.warn(`${tag} Failed to save query memory for ${persona.name}:`, err)
+      );
 
       // ── Phase 3: Searching — Algolia primary index ─────────────────
       setPhase(industry.id, 'searching', { currentQuery: primaryQuery });

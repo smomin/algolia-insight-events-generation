@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { AgentState, AgentSystemStatus, SupervisorDecision, GuardrailResult, IndustryV2 } from '@/types';
+import type { AgentState, AgentSystemStatus, SupervisorDecision, GuardrailResult, IndustryV2, AgentConfigs } from '@/types';
 import { useSSE } from '../hooks/useSSE';
 import AgentStatusCard from './AgentStatusCard';
 import SupervisorLog from './SupervisorLog';
@@ -66,6 +66,13 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
   const [isRunningNow, setIsRunningNow] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
+  // Agent config editing
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigs | null>(null);
+  const [editingAgent, setEditingAgent] = useState<keyof AgentConfigs | null>(null);
+  const [editDraft, setEditDraft] = useState('');
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [configSaveError, setConfigSaveError] = useState<string | null>(null);
+
   const decisionsSeen = useRef(new Set<string>());
 
   // ── Load initial status ────────────────────────────────────────────
@@ -89,6 +96,49 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
     const id = setInterval(() => { loadStatus(); }, 15_000);
     return () => clearInterval(id);
   }, [loadStatus]);
+
+  const loadAgentConfigs = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agents/config');
+      if (!res.ok) return;
+      const data: AgentConfigs = await res.json();
+      setAgentConfigs(data);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => { loadAgentConfigs(); }, [loadAgentConfigs]);
+
+  const handleEditAgent = (agentKey: keyof AgentConfigs) => {
+    if (!agentConfigs) return;
+    setEditDraft(agentConfigs[agentKey].systemPrompt);
+    setEditingAgent(agentKey);
+    setConfigSaveError(null);
+  };
+
+  const handleSaveAgentConfig = async () => {
+    if (!editingAgent || !agentConfigs) return;
+    setIsSavingConfig(true);
+    setConfigSaveError(null);
+    try {
+      const res = await fetch('/api/agents/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [editingAgent]: { systemPrompt: editDraft } }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setConfigSaveError((body as { error?: string }).error ?? `Server error ${res.status}`);
+        return;
+      }
+      const updated: AgentConfigs = await res.json();
+      setAgentConfigs(updated);
+      setEditingAgent(null);
+    } catch (e) {
+      setConfigSaveError(e instanceof Error ? e.message : 'Network error');
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
 
   // Load guardrail violations for each industry
   useEffect(() => {
@@ -394,29 +444,64 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
           </div>
         )}
 
-        {/* How it works — collapsed hint */}
-        <div className="mt-4 pt-4 border-t border-slate-700/50 grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-slate-500">
-          <div className="flex items-start gap-2">
-            <span className="text-violet-400 text-base shrink-0">①</span>
-            <div>
-              <p className="text-slate-300 font-medium mb-0.5">Supervisor Agent</p>
-              Monitors all industries every 10 min. Calculates urgency from daily target vs. time elapsed. Dispatches sessions to keep every industry on pace.
+        {/* Agent system prompt cards */}
+        <div className="mt-4 pt-4 border-t border-slate-700/50 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {([
+            {
+              key: 'supervisor' as const,
+              accent: 'text-violet-400',
+              border: 'border-violet-800/40',
+              bg: 'bg-violet-900/10',
+              num: '①',
+              label: 'Supervisor Agent',
+              badge: 'bg-violet-900/40 text-violet-300 border-violet-800',
+            },
+            {
+              key: 'industryAgent' as const,
+              accent: 'text-blue-400',
+              border: 'border-blue-800/40',
+              bg: 'bg-blue-900/10',
+              num: '②',
+              label: 'Industry Agent',
+              badge: 'bg-blue-900/40 text-blue-300 border-blue-800',
+            },
+            {
+              key: 'guardrails' as const,
+              accent: 'text-amber-400',
+              border: 'border-amber-800/40',
+              bg: 'bg-amber-900/10',
+              num: '③',
+              label: 'Guardrails Agent',
+              badge: 'bg-amber-900/40 text-amber-300 border-amber-800',
+            },
+          ] as const).map(({ key, accent, border, bg, num, label, badge }) => (
+            <div key={key} className={`rounded-lg border ${border} ${bg} p-3 flex flex-col gap-2`}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className={`${accent} text-base`}>{num}</span>
+                  <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded border ${badge}`}>{label}</span>
+                </div>
+                <button
+                  onClick={() => handleEditAgent(key)}
+                  className="text-[10px] text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-500 px-2 py-0.5 rounded transition-colors flex items-center gap-1"
+                >
+                  <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  Edit
+                </button>
+              </div>
+              <p className="text-[10px] text-slate-400 leading-relaxed line-clamp-3">
+                {agentConfigs ? agentConfigs[key].systemPrompt : '—'}
+              </p>
+              {agentConfigs?.[key].updatedAt && (
+                <p className="text-[9px] text-slate-600">
+                  Updated {new Date(agentConfigs[key].updatedAt!).toLocaleDateString()}
+                </p>
+              )}
             </div>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-blue-400 text-base shrink-0">②</span>
-            <div>
-              <p className="text-slate-300 font-medium mb-0.5">Industry Agents</p>
-              Each industry runs as an autonomous agent. Cycles through phases: planning → validating → searching → sending. Emits live status.
-            </div>
-          </div>
-          <div className="flex items-start gap-2">
-            <span className="text-amber-400 text-base shrink-0">③</span>
-            <div>
-              <p className="text-slate-300 font-medium mb-0.5">Guardrails Agent</p>
-              Validates every query against the active persona before it hits Algolia. Rejects off-persona queries and suggests better alternatives (up to 3 retries).
-            </div>
-          </div>
+          ))}
         </div>
 
         {/* App settings row */}
@@ -637,6 +722,101 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
             violations={tabViolations}
             industryName={tabIndustry.name}
           />
+        </div>
+      )}
+
+      {/* ── Agent system prompt edit modal ─────────────────────────── */}
+      {editingAgent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
+            {/* Modal header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+                <h3 className="text-sm font-semibold text-white">
+                  Edit System Prompt —{' '}
+                  <span className="text-slate-300">
+                    {editingAgent === 'supervisor' ? 'Supervisor Agent'
+                      : editingAgent === 'guardrails' ? 'Guardrails Agent'
+                      : 'Industry Agent'}
+                  </span>
+                </h3>
+              </div>
+              <button
+                onClick={() => { setEditingAgent(null); setConfigSaveError(null); }}
+                className="text-slate-500 hover:text-white transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Description */}
+            <div className="px-5 pt-3 pb-2">
+              <p className="text-[11px] text-slate-400">
+                {editingAgent === 'supervisor' &&
+                  'This prompt defines the Supervisor Agent\'s role and decision-making behavior. It is stored and displayed for reference — the supervisor\'s pacing logic is algorithmic.'}
+                {editingAgent === 'guardrails' &&
+                  'This system prompt is sent to the LLM on every guardrail validation call. It determines how strictly queries are evaluated against persona profiles.'}
+                {editingAgent === 'industryAgent' &&
+                  'This prompt describes the Industry Agent\'s overarching behavior. It is stored as context; per-industry query prompts are configured in the Industries tab.'}
+              </p>
+            </div>
+
+            {/* Textarea */}
+            <div className="flex-1 overflow-hidden px-5 pb-3 min-h-0">
+              <textarea
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                rows={14}
+                className="w-full h-full min-h-[280px] bg-slate-800 border border-slate-700 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30 rounded-lg px-3 py-2.5 text-[12px] text-slate-200 font-mono leading-relaxed resize-none outline-none transition-colors"
+                spellCheck={false}
+              />
+            </div>
+
+            {/* Error */}
+            {configSaveError && (
+              <div className="mx-5 mb-3 flex items-center gap-2 bg-rose-900/20 border border-rose-800/50 rounded-lg px-3 py-2">
+                <svg className="w-3.5 h-3.5 text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-xs text-rose-300">{configSaveError}</p>
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-slate-700">
+              <button
+                onClick={() => { setEditingAgent(null); setConfigSaveError(null); }}
+                className="px-4 py-2 text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveAgentConfig}
+                disabled={isSavingConfig}
+                className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                {isSavingConfig ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Save Prompt
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

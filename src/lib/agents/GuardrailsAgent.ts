@@ -10,26 +10,13 @@
 
 import { callLLM } from '@/lib/llm';
 import { emitToIndustry } from '@/lib/sse';
-import { appendGuardrailViolation } from '@/lib/agentDb';
+import { appendGuardrailViolation, getAgentConfigs, DEFAULT_GUARDRAILS_PROMPT } from '@/lib/agentDb';
 import type { Persona, IndustryV2, GuardrailResult } from '@/types';
 
 export const GUARDRAIL_MAX_RETRIES = parseInt(
   process.env.GUARDRAIL_MAX_RETRIES ?? '3',
   10
 );
-
-const SYSTEM_PROMPT = `You are a guardrails validator for an Algolia search event simulation system.
-
-Your job: evaluate whether a proposed search query authentically represents what the given user persona would actually search for in this industry.
-
-Evaluate these criteria:
-1. Expertise match — is the query complexity appropriate for the persona's skill level?
-2. Domain relevance — does the query fit the industry domain?
-3. Persona consistency — does the query reflect the persona's budget, interests, and personality?
-4. Authenticity — does it sound like something a real person with this profile would type?
-
-Respond with valid JSON ONLY (no markdown fences, no extra text):
-{"approved": boolean, "reason": "one sentence", "suggestedQuery": "only if rejected"}`;
 
 export class GuardrailsAgent {
   async validate(
@@ -45,10 +32,13 @@ export class GuardrailsAgent {
 
     const userMessage = `Industry: ${industry.name}\n\nPersona:\n${personaLines}\n\nProposed search query: "${query}"`;
 
+    const configs = await getAgentConfigs().catch(() => null);
+    const systemPrompt = configs?.guardrails?.systemPrompt ?? DEFAULT_GUARDRAILS_PROMPT;
+
     try {
       const raw = await callLLM(
         [{ role: 'user', content: userMessage }],
-        { systemPrompt: SYSTEM_PROMPT, maxTokens: 200 },
+        { systemPrompt, maxTokens: 200 },
         industry.id
       );
 
