@@ -346,9 +346,6 @@ export default function AgentStatusCard({
             )}
           </span>
         )}
-        <span className="ml-auto text-[10px] text-slate-500">
-          {new Date(state.lastActivity).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
       </div>
     </div>
   );
