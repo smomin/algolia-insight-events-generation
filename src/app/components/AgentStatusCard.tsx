@@ -166,38 +166,6 @@ export default function AgentStatusCard({
         </span>
       </div>
 
-      {/* Algolia App + LLM pills */}
-      {(algoliaApp || llmProvider) && (
-        <div className="flex flex-wrap gap-1.5">
-          {algoliaApp && (
-            <span className="inline-flex items-center gap-1 text-[10px] bg-slate-900/60 border border-slate-700/80 text-slate-400 px-2 py-0.5 rounded-full">
-              <svg className="w-2.5 h-2.5 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
-              </svg>
-              <span className="text-blue-300 font-medium">{algoliaApp.name}</span>
-              <span className="text-slate-600">·</span>
-              <span className="font-mono text-slate-500">{algoliaApp.appId}</span>
-              {algoliaApp.isOverride && (
-                <span className="text-blue-400/60 italic ml-0.5">override</span>
-              )}
-            </span>
-          )}
-          {llmProvider && (
-            <span className="inline-flex items-center gap-1 text-[10px] bg-slate-900/60 border border-slate-700/80 text-slate-400 px-2 py-0.5 rounded-full">
-              <svg className="w-2.5 h-2.5 text-violet-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
-              </svg>
-              <span className="text-violet-300 font-medium">{llmProvider.name}</span>
-              <span className="text-slate-600">·</span>
-              <span className="font-mono text-slate-500">{llmProvider.model}</span>
-              {llmProvider.isOverride && (
-                <span className="text-violet-400/60 italic ml-0.5">override</span>
-              )}
-            </span>
-          )}
-        </div>
-      )}
-
       {/* Index chips */}
       {((indices && indices.length > 0) || siteUrl) && (
         <div className="flex flex-wrap gap-1.5">
@@ -327,9 +295,6 @@ export default function AgentStatusCard({
             {state.errors.length} {state.errors.length === 1 ? 'error' : 'errors'}
           </span>
         )}
-        <span className="ml-auto">
-          {new Date(state.lastActivity).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-        </span>
       </div>
 
       {/* Latest error */}
@@ -352,6 +317,39 @@ export default function AgentStatusCard({
           </div>
         </div>
       )}
+
+      {/* Algolia App + LLM pills + time — pinned to bottom */}
+      <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-700/50 mt-auto">
+        {algoliaApp && (
+          <span className="inline-flex items-center gap-1 text-[10px] bg-slate-900/60 border border-slate-700/80 text-slate-400 px-2 py-0.5 rounded-full">
+            <svg className="w-2.5 h-2.5 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
+            </svg>
+            <span className="text-blue-300 font-medium">{algoliaApp.name}</span>
+            <span className="text-slate-600">·</span>
+            <span className="font-mono text-slate-500">{algoliaApp.appId}</span>
+            {algoliaApp.isOverride && (
+              <span className="text-blue-400/60 italic ml-0.5">override</span>
+            )}
+          </span>
+        )}
+        {llmProvider && (
+          <span className="inline-flex items-center gap-1 text-[10px] bg-slate-900/60 border border-slate-700/80 text-slate-400 px-2 py-0.5 rounded-full">
+            <svg className="w-2.5 h-2.5 text-violet-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+            </svg>
+            <span className="text-violet-300 font-medium">{llmProvider.name}</span>
+            <span className="text-slate-600">·</span>
+            <span className="font-mono text-slate-500">{llmProvider.model}</span>
+            {llmProvider.isOverride && (
+              <span className="text-violet-400/60 italic ml-0.5">override</span>
+            )}
+          </span>
+        )}
+        <span className="ml-auto text-[10px] text-slate-500">
+          {new Date(state.lastActivity).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </span>
+      </div>
     </div>
   );
 }
