@@ -12,12 +12,12 @@
  * Scope  : _default
  * Collections:
  *   appConfig         — single doc (key = "_config")  global app credentials
- *   industryConfigs   — one doc per industry  (key = industryId)
- *   personas          — one doc per industry  (key = industryId)
- *   counters          — one doc per industry  (key = industryId)
- *   eventLogs         — one doc per industry  (key = industryId)
- *   schedulerRuns     — one doc per industry  (key = industryId)
- *   sessions          — one doc per industry  (key = industryId)
+ *   siteConfigs       — one doc per site  (key = siteId)
+ *   personas          — one doc per site  (key = siteId)
+ *   counters          — one doc per site  (key = siteId)
+ *   eventLogs         — one doc per site  (key = siteId)
+ *   schedulerRuns     — one doc per site  (key = siteId)
+ *   sessions          — one doc per site  (key = siteId)
  *   agentData         — agent system: guardrail logs, supervisor decisions
  */
 
@@ -39,7 +39,7 @@ const SCOPE_NAME = '_default';
 
 export const COLLECTIONS = [
   'appConfig',
-  'industryConfigs',
+  'siteConfigs',
   'personas',
   'counters',
   'eventLogs',

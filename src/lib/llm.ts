@@ -3,7 +3,7 @@
  *
  * Supports: Anthropic, OpenAI, Ollama (via OpenAI-compatible API).
  * Provider and model are resolved per-call using the same priority chain
- * as credentials: industry override → app default → legacy Anthropic key.
+ * as credentials: site override → app default → legacy Anthropic key.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
@@ -27,7 +27,7 @@ export interface LLMCallOptions {
   maxTokens?: number;
   /** Override the model for this specific call (over provider default). */
   modelOverride?: string;
-  /** Override the provider ID for this specific call (bypasses industry + default resolution). */
+  /** Override the provider ID for this specific call (bypasses site + default resolution). */
   providerIdOverride?: string;
 }
 
@@ -41,14 +41,14 @@ export interface LLMCallOptions {
  *
  * @param messages   Conversation messages (user/assistant turns).
  * @param options    System prompt, max tokens, optional model override.
- * @param industryId Optional industry id for per-industry provider resolution.
+ * @param siteId Optional site id for per-site provider resolution.
  */
 export async function callLLM(
   messages: LLMMessage[],
   options: LLMCallOptions = {},
-  industryId?: string
+  siteId?: string
 ): Promise<string> {
-  const resolved = await resolveLLMProvider(industryId, options.providerIdOverride);
+  const resolved = await resolveLLMProvider(siteId, options.providerIdOverride);
 
   if (!resolved) {
     throw new Error(
@@ -65,7 +65,7 @@ export async function callLLM(
 
   log.debug('call start', {
     provider: providerTag,
-    industryId,
+    siteId,
     maxTokens: options.maxTokens ?? 1024,
     hasSystemPrompt: !!options.systemPrompt,
     messageCount: messages.length,

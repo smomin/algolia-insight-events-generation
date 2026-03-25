@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getIndustry, updateIndustry, removeIndustry, getPersonas } from '@/lib/industries';
-import type { IndustryV2 } from '@/types';
+import { getSite, updateSite, removeSite, getPersonas } from '@/lib/sites';
+import type { SiteConfig } from '@/types';
 
 export async function GET(
   _request: Request,
@@ -8,12 +8,12 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const industry = await getIndustry(id);
-    if (!industry) {
-      return NextResponse.json({ error: 'Industry not found' }, { status: 404 });
+    const site = await getSite(id);
+    if (!site) {
+      return NextResponse.json({ error: 'Site not found' }, { status: 404 });
     }
-    const personas = await getPersonas(industry);
-    return NextResponse.json({ industry, personaCount: personas.length });
+    const personas = await getPersonas(site);
+    return NextResponse.json({ site, personaCount: personas.length });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -27,7 +27,7 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = (await request.json()) as Partial<
-      Omit<IndustryV2, 'id' | 'isBuiltIn' | 'createdAt'>
+      Omit<SiteConfig, 'id' | 'isBuiltIn' | 'createdAt'>
     >;
 
     if (body.indices !== undefined) {
@@ -45,11 +45,11 @@ export async function PUT(
       }
     }
 
-    const updated = await updateIndustry(id, body);
+    const updated = await updateSite(id, body);
     if (!updated) {
-      return NextResponse.json({ error: 'Industry not found' }, { status: 404 });
+      return NextResponse.json({ error: 'Site not found' }, { status: 404 });
     }
-    return NextResponse.json({ industry: updated });
+    return NextResponse.json({ site: updated });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -62,17 +62,17 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    const industry = await getIndustry(id);
-    if (!industry) {
-      return NextResponse.json({ error: 'Industry not found' }, { status: 404 });
+    const site = await getSite(id);
+    if (!site) {
+      return NextResponse.json({ error: 'Site not found' }, { status: 404 });
     }
-    if (industry.isBuiltIn) {
+    if (site.isBuiltIn) {
       return NextResponse.json(
-        { error: 'Built-in industries cannot be deleted' },
+        { error: 'Built-in sites cannot be deleted' },
         { status: 403 }
       );
     }
-    await removeIndustry(id);
+    await removeSite(id);
     return NextResponse.json({ success: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

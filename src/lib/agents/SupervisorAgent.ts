@@ -1,10 +1,10 @@
 /**
- * SupervisorAgent — singleton orchestrator for all industry agents.
+ * SupervisorAgent — singleton orchestrator for all site agents.
  *
  * Runs on a configurable interval (default 10 minutes). On each tick it:
- *  1. Checks the current event progress for every industry
+ *  1. Checks the current event progress for every site
  *  2. Calculates urgency by comparing % of target complete vs % of day elapsed
- *  3. Dispatches IndustryAgent.runBatch() for industries that are behind
+ *  3. Dispatches SiteAgent.runBatch() for sites that are behind
  *  4. Emits a SupervisorDecision via SSE and persists it to Couchbase
  *
  * Urgency tiers:
@@ -16,11 +16,11 @@
 
 import cron from 'node-cron';
 import type { SupervisorDecision, SupervisorUrgency } from '@/types';
-import { emitToIndustry } from '@/lib/sse';
-import { getAllIndustries, getPersonas, getEventLimit } from '@/lib/industries';
+import { emitToSite } from '@/lib/sse';
+import { getAllSites, getPersonas, getEventLimit } from '@/lib/sites';
 import { getTodayCounters, resetCountersIfNewDay } from '@/lib/db';
 import { appendSupervisorDecision } from '@/lib/agentDb';
-import { industryAgent } from './IndustryAgent';
+import { siteAgent } from './SiteAgent';
 import { createLogger } from '@/lib/logger';
 import { generateId } from '@/lib/utils';
 
@@ -125,7 +125,7 @@ function calcUrgency(
 async function supervisorTick(): Promise<void> {
   supervisorState.lastRunAt = new Date().toISOString();
 
-  const industries = await getAllIndustries();
+  const sites = await getAllSites();
   const eventLimit = getEventLimit();
   const intervalMs = parseInt(
     process.env.AGENT_SUPERVISOR_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
@@ -137,26 +137,26 @@ async function supervisorTick(): Promise<void> {
   const fractionOfDayElapsed = minutesOfDay / 1440;
 
   log.info('tick start', {
-    industryCount: industries.length,
+    siteCount: sites.length,
     dayElapsedPct: Math.round(fractionOfDayElapsed * 100),
     intervalMs,
   });
 
-  for (const industry of industries) {
-    const ilog = log.child(industry.id);
+  for (const site of sites) {
+    const slog = log.child(site.id);
 
-    const personas = await getPersonas(industry);
+    const personas = await getPersonas(site);
 
-    await resetCountersIfNewDay(industry.id);
-    const counters = await getTodayCounters(industry.id);
+    await resetCountersIfNewDay(site.id);
+    const counters = await getTodayCounters(site.id);
     const eventsSent = Object.values(counters.byIndex).reduce((s, n) => s + n, 0);
 
-    const activeIndices = industry.indices.filter((i) => i.events.length > 0);
+    const activeIndices = site.indices.filter((i) => i.events.length > 0);
     const dailyTarget = eventLimit * Math.max(1, activeIndices.length);
     const eventsRemaining = Math.max(0, dailyTarget - eventsSent);
     const percentComplete = dailyTarget > 0 ? eventsSent / dailyTarget : 0;
 
-    ilog.debug('progress snapshot', {
+    slog.debug('progress snapshot', {
       personas: personas.length,
       eventsSent,
       dailyTarget,
@@ -166,15 +166,15 @@ async function supervisorTick(): Promise<void> {
     });
 
     if (personas.length === 0) {
-      ilog.warn('no personas configured — skipping');
+      slog.warn('no personas configured — skipping');
       const decision: SupervisorDecision = {
         id: supervisorId(),
         timestamp: new Date().toISOString(),
-        industryId: industry.id,
-        industryName: industry.name,
+        siteId: site.id,
+        siteName: site.name,
         urgency: 'normal',
         sessionsDispatched: 0,
-        reasoning: '⚠ No personas configured — add personas in the Industries tab to enable autonomous generation.',
+        reasoning: '⚠ No personas configured — add personas in the Sites tab to enable autonomous generation.',
         progressSnapshot: {
           sent: eventsSent,
           target: dailyTarget,
@@ -182,8 +182,8 @@ async function supervisorTick(): Promise<void> {
         },
       };
       supervisorState.recentDecisions = [decision, ...supervisorState.recentDecisions].slice(0, 50);
-      emitToIndustry('_supervisor', 'supervisor', decision);
-      appendSupervisorDecision(decision).catch((err: unknown) => ilog.error('failed to persist no-persona decision', err));
+      emitToSite('_supervisor', 'supervisor', decision);
+      appendSupervisorDecision(decision).catch((err: unknown) => slog.error('failed to persist no-persona decision', err));
       continue;
     }
 
@@ -194,7 +194,7 @@ async function supervisorTick(): Promise<void> {
       intervalMs
     );
 
-    ilog.info('decision', {
+    slog.info('decision', {
       urgency,
       sessionsToDispatch,
       eventsSent,
@@ -206,8 +206,8 @@ async function supervisorTick(): Promise<void> {
     const decision: SupervisorDecision = {
       id: supervisorId(),
       timestamp: new Date().toISOString(),
-      industryId: industry.id,
-      industryName: industry.name,
+      siteId: site.id,
+      siteName: site.name,
       urgency,
       sessionsDispatched: sessionsToDispatch,
       reasoning: `${personas.length} persona${personas.length !== 1 ? 's' : ''} · ${reasoning}`,
@@ -223,15 +223,15 @@ async function supervisorTick(): Promise<void> {
       ...supervisorState.recentDecisions,
     ].slice(0, 50);
 
-    emitToIndustry('_supervisor', 'supervisor', decision);
-    appendSupervisorDecision(decision).catch((err: unknown) => ilog.error('failed to persist decision', err));
+    emitToSite('_supervisor', 'supervisor', decision);
+    appendSupervisorDecision(decision).catch((err: unknown) => slog.error('failed to persist decision', err));
 
     if (sessionsToDispatch > 0) {
-      ilog.info(`dispatching ${sessionsToDispatch} session(s) for ${personas.length} persona(s)`);
-      industryAgent
-        .runBatch(personas, industry, sessionsToDispatch)
+      slog.info(`dispatching ${sessionsToDispatch} session(s) for ${personas.length} persona(s)`);
+      siteAgent
+        .runBatch(personas, site, sessionsToDispatch)
         .catch((err: unknown) => {
-          ilog.error('batch run failed', err);
+          slog.error('batch run failed', err);
         });
     }
   }
@@ -264,7 +264,7 @@ export function startSupervisor(): void {
   supervisorState.startedAt = new Date().toISOString();
 
   log.info('started', { intervalMinutes, cronExpr, startedAt: supervisorState.startedAt });
-  emitToIndustry('_supervisor', 'supervisor', {
+  emitToSite('_supervisor', 'supervisor', {
     type: 'started',
     timestamp: supervisorState.startedAt,
   });
@@ -285,7 +285,7 @@ export function stopSupervisor(): void {
   }
   supervisorState.isRunning = false;
   log.info('stopped');
-  emitToIndustry('_supervisor', 'supervisor', {
+  emitToSite('_supervisor', 'supervisor', {
     type: 'stopped',
     timestamp: new Date().toISOString(),
   });

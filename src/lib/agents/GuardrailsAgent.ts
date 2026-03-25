@@ -4,14 +4,14 @@
  * Before every Algolia search query is executed, the GuardrailsAgent
  * evaluates whether the query authentically represents the persona who
  * would be running that search. Rejected queries are logged and the
- * IndustryAgent may retry with the suggested alternative (up to
+ * SiteAgent may retry with the suggested alternative (up to
  * GUARDRAIL_MAX_RETRIES times).
  */
 
 import { callLLM } from '@/lib/llm';
-import { emitToIndustry } from '@/lib/sse';
+import { emitToSite } from '@/lib/sse';
 import { appendGuardrailViolation, getAgentConfigs, DEFAULT_GUARDRAILS_PROMPT } from '@/lib/agentDb';
-import type { Persona, IndustryV2, GuardrailResult } from '@/types';
+import type { Persona, SiteConfig, GuardrailResult } from '@/types';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('Guardrails');
@@ -25,19 +25,19 @@ export class GuardrailsAgent {
   async validate(
     query: string,
     persona: Persona,
-    industry: IndustryV2,
+    site: SiteConfig,
     attemptNumber = 1
   ): Promise<GuardrailResult> {
-    const ilog = log.child(industry.id);
+    const slog = log.child(site.id);
 
-    ilog.debug('validating query', { persona: persona.name, query, attemptNumber });
+    slog.debug('validating query', { persona: persona.name, query, attemptNumber });
 
     const personaLines = Object.entries(persona)
       .filter(([k]) => !['id', 'userToken'].includes(k))
       .map(([k, v]) => `  ${k}: ${Array.isArray(v) ? (v as unknown[]).join(', ') : v}`)
       .join('\n');
 
-    const userMessage = `Industry: ${industry.name}\n\nPersona:\n${personaLines}\n\nProposed search query: "${query}"`;
+    const userMessage = `Site: ${site.name}\n\nPersona:\n${personaLines}\n\nProposed search query: "${query}"`;
 
     const configs = await getAgentConfigs().catch(() => null);
     const systemPrompt = configs?.guardrails?.systemPrompt ?? DEFAULT_GUARDRAILS_PROMPT;
@@ -46,7 +46,7 @@ export class GuardrailsAgent {
       const raw = await callLLM(
         [{ role: 'user', content: userMessage }],
         { systemPrompt, maxTokens: 200 },
-        industry.id
+        site.id
       );
 
       const cleaned = raw
@@ -64,7 +64,7 @@ export class GuardrailsAgent {
         approved: !!parsed.approved,
         reason: parsed.reason ?? 'No reason provided',
         suggestedQuery: parsed.suggestedQuery,
-        industryId: industry.id,
+        siteId: site.id,
         personaId: persona.id,
         personaName: persona.name,
         originalQuery: query,
@@ -74,23 +74,23 @@ export class GuardrailsAgent {
       };
 
       if (result.approved) {
-        ilog.debug('query approved', { persona: persona.name, query, attemptNumber, reason: result.reason });
+        slog.debug('query approved', { persona: persona.name, query, attemptNumber, reason: result.reason });
       } else {
-        ilog.warn(`query REJECTED (attempt ${attemptNumber})`, {
+        slog.warn(`query REJECTED (attempt ${attemptNumber})`, {
           persona: persona.name,
           query,
           reason: result.reason,
           suggestedQuery: result.suggestedQuery,
         });
-        emitToIndustry(industry.id, 'guardrail', result);
-        appendGuardrailViolation(industry.id, result).catch((err) =>
-          ilog.error('failed to persist guardrail violation', err)
+        emitToSite(site.id, 'guardrail', result);
+        appendGuardrailViolation(site.id, result).catch((err) =>
+          slog.error('failed to persist guardrail violation', err)
         );
       }
 
       return result;
     } catch (err) {
-      ilog.warn('validation LLM call failed — failing open (approved by default)', {
+      slog.warn('validation LLM call failed — failing open (approved by default)', {
         persona: persona.name,
         query,
         attemptNumber,
@@ -99,7 +99,7 @@ export class GuardrailsAgent {
       return {
         approved: true,
         reason: 'Guardrail validation unavailable — approved by default',
-        industryId: industry.id,
+        siteId: site.id,
         personaId: persona.id,
         personaName: persona.name,
         originalQuery: query,

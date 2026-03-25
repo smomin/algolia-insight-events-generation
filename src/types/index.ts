@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────
-// Flexible N-index industry model (V2)
+// Flexible N-index site model
 // ─────────────────────────────────────────────
 
 export type AlgoliaEventType = 'view' | 'click' | 'conversion';
@@ -12,10 +12,10 @@ export interface IndexEvent {
   eventName: string;
 }
 
-/** A configured Algolia index belonging to an industry */
+/** A configured Algolia index belonging to a site */
 export interface FlexIndex {
-  id: string;       // slug unique within industry, e.g. "recipes" or "hotels"
-  label: string;    // human-readable, e.g. "Recipes"
+  id: string;        // slug unique within site, e.g. "recipes" or "hotels"
+  label: string;     // human-readable, e.g. "Recipes"
   indexName: string; // actual Algolia index name
   role: 'primary' | 'secondary';
   events: IndexEvent[];
@@ -29,12 +29,12 @@ export type LLMProviderType = 'openai' | 'anthropic' | 'ollama';
 
 /** A configured LLM provider — stored (with API key encrypted) in AppConfig */
 export interface LLMProviderConfig {
-  id: string;             // unique slug, e.g. "my-anthropic" or "local-ollama"
-  name: string;           // display name, e.g. "Anthropic (prod)"
+  id: string;           // unique slug, e.g. "my-anthropic" or "local-ollama"
+  name: string;         // display name, e.g. "Anthropic (prod)"
   type: LLMProviderType;
-  apiKey?: string;        // stored AES-256-GCM encrypted; not required for Ollama
-  baseUrl?: string;       // required for Ollama; optional for OpenAI-compatible endpoints
-  defaultModel: string;   // e.g. "claude-sonnet-4-5", "gpt-4o", "llama3.2"
+  apiKey?: string;      // stored AES-256-GCM encrypted; not required for Ollama
+  baseUrl?: string;     // required for Ollama; optional for OpenAI-compatible endpoints
+  defaultModel: string; // e.g. "claude-sonnet-4-5", "gpt-4o", "llama3.2"
 }
 
 // ─────────────────────────────────────────────
@@ -53,47 +53,48 @@ export interface AlgoliaAppConfig {
 // App-level configuration (stored encrypted in Couchbase)
 // ─────────────────────────────────────────────
 
-/** Credential fields shared by AppConfig and IndustryCredentials. */
+/** Credential fields shared by AppConfig and SiteCredentials. */
 export interface CredentialFields {
   algoliaAppId?: string;
-  algoliaSearchApiKey?: string;   // stored AES-256-GCM encrypted
+  algoliaSearchApiKey?: string; // stored AES-256-GCM encrypted
 }
 
 /** Global app credentials — single document in the appConfig collection. */
 export interface AppConfig extends CredentialFields {
   updatedAt: string;
-  llmProviders?: LLMProviderConfig[];          // all configured LLM providers
-  defaultLlmProviderId?: string;               // provider to use when no industry override
-  personaGenerationLlmProviderId?: string;     // provider used specifically for persona generation
-  algoliaApps?: AlgoliaAppConfig[];            // all configured Algolia applications
-  defaultAlgoliaAppId?: string;               // app to use when no industry override
+  llmProviders?: LLMProviderConfig[];        // all configured LLM providers
+  defaultLlmProviderId?: string;             // provider to use when no site override
+  personaGenerationLlmProviderId?: string;   // provider used specifically for persona generation
+  algoliaApps?: AlgoliaAppConfig[];          // all configured Algolia applications
+  defaultAlgoliaAppId?: string;             // app to use when no site override
 }
 
-/** Per-industry credential overrides — override global app config or env vars. */
-export type IndustryCredentials = CredentialFields;
+/** Per-site credential overrides — override global app config or env vars. */
+export type SiteCredentials = CredentialFields;
 
-/** Full industry definition — stored in DB, editable via UI */
-export interface IndustryV2 {
+/** Full site definition — stored in DB, editable via UI */
+export interface SiteConfig {
   id: string;
   name: string;
   icon: string;
   color: string;
-  indices: FlexIndex[];        // first primary, then 0-N secondaries
+  siteUrl?: string;           // optional URL of the site being simulated
+  indices: FlexIndex[];       // first primary, then 0-N secondaries
   claudePrompts: {
     generatePrimaryQuery: string;
     selectBestResult: string;
     generateSecondaryQueries: string;
   };
-  credentials?: IndustryCredentials; // optional per-industry credential overrides
-  llmProviderId?: string;       // override app-level default LLM provider for this industry
-  algoliaAppConfigId?: string;  // override app-level default Algolia app for this industry
-  isBuiltIn: boolean;          // built-in industries cannot be deleted
+  credentials?: SiteCredentials; // optional per-site credential overrides
+  llmProviderId?: string;        // override app-level default LLM provider for this site
+  algoliaAppConfigId?: string;   // override app-level default Algolia app for this site
+  isBuiltIn: boolean;            // built-in sites cannot be deleted
   createdAt: string;
   updatedAt: string;
 }
 
 // ─────────────────────────────────────────────
-// Persona — generic across all industries
+// Persona — generic across all sites
 // ─────────────────────────────────────────────
 
 export interface PersonaBase {
@@ -101,7 +102,7 @@ export interface PersonaBase {
   name: string;
   userToken: string;
   description: string;
-  industry?: string;
+  site?: string;
   skill?: 'beginner' | 'intermediate' | 'advanced';
   budget?: 'low' | 'medium' | 'high';
   tags?: string[];
@@ -160,7 +161,7 @@ export interface SentEvent {
   event: InsightEvent;
   batchStatus: number;
   sentAt: number;
-  industryId?: string;
+  siteId?: string;
   personaId?: string;
   personaName?: string;
   sessionId?: string;
@@ -190,12 +191,12 @@ export interface SessionResult {
 }
 
 // ─────────────────────────────────────────────
-// Session record — stored in DB per-industry
+// Session record — stored in DB per-site
 // ─────────────────────────────────────────────
 
 export interface SessionRecord {
   id: string;
-  industryId: string;
+  siteId: string;
   personaId: string;
   personaName: string;
   startedAt: string;
@@ -212,7 +213,7 @@ export interface SessionRecord {
 
 export interface SchedulerRun {
   id: string;
-  industryId: string;
+  siteId: string;
   startedAt: string;
   completedAt?: string;
   sessionsPlanned: number;
@@ -223,10 +224,10 @@ export interface SchedulerRun {
 }
 
 // ─────────────────────────────────────────────
-// Per-industry daily counters (N-index)
+// Per-site daily counters (N-index)
 // ─────────────────────────────────────────────
 
-export interface IndustryCounters {
+export interface SiteCounters {
   date: string;
   byIndex: Record<string, number>; // FlexIndex.id → count today
 }
@@ -235,35 +236,35 @@ export interface IndustryCounters {
 // DB schema
 // ─────────────────────────────────────────────
 
-export interface IndustryData {
-  counters: IndustryCounters;
+export interface SiteData {
+  counters: SiteCounters;
   eventLog: SentEvent[];
   schedulerRuns: SchedulerRun[];
   sessions: SessionRecord[];
 }
 
 export interface DbSchema {
-  industryConfigs: Record<string, IndustryV2>; // all industry definitions
-  industries: Record<string, IndustryData>;    // per-industry runtime data
+  siteConfigs: Record<string, SiteConfig>; // all site definitions
+  sites: Record<string, SiteData>;         // per-site runtime data
 }
 
 // ─────────────────────────────────────────────
 // Scheduler status (returned from status API)
 // ─────────────────────────────────────────────
 
-export interface IndustrySchedulerStatus {
-  industryId: string;
+export interface SiteSchedulerStatus {
+  siteId: string;
   isRunning: boolean;
   isDistributing: boolean;
   nextRun: string | null;
-  counters: IndustryCounters;
+  counters: SiteCounters;
   eventLimit: number;
   lastRun: SchedulerRun | null;
   currentRun: SchedulerRun | null;
 }
 
 export interface AllSchedulerStatus {
-  industries: Record<string, IndustrySchedulerStatus>;
+  sites: Record<string, SiteSchedulerStatus>;
 }
 
 // ─────────────────────────────────────────────
@@ -280,7 +281,7 @@ export type AgentPhase =
   | 'error';
 
 export interface AgentState {
-  industryId: string;
+  siteId: string;
   phase: AgentPhase;
   currentPersonaId?: string;
   currentPersonaName?: string;
@@ -299,7 +300,7 @@ export interface GuardrailResult {
   approved: boolean;
   reason: string;
   suggestedQuery?: string;
-  industryId: string;
+  siteId: string;
   personaId: string;
   personaName: string;
   originalQuery: string;
@@ -313,8 +314,8 @@ export type SupervisorUrgency = 'ahead' | 'normal' | 'high' | 'critical';
 export interface SupervisorDecision {
   id: string;
   timestamp: string;
-  industryId: string;
-  industryName: string;
+  siteId: string;
+  siteName: string;
   urgency: SupervisorUrgency;
   sessionsDispatched: number;
   reasoning: string;
@@ -350,5 +351,5 @@ export interface AgentPromptConfig {
 export interface AgentConfigs {
   supervisor: AgentPromptConfig;
   guardrails: AgentPromptConfig;
-  industryAgent: AgentPromptConfig;
+  siteAgent: AgentPromptConfig;
 }

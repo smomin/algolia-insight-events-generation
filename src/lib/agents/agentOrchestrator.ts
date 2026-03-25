@@ -2,7 +2,7 @@
  * AgentOrchestrator — top-level lifecycle manager for the agentic system.
  *
  * Responsible for:
- *  - Loading personas for all industries on startup
+ *  - Loading personas for all sites on startup
  *  - Starting / stopping the SupervisorAgent
  *  - Exposing unified status for the API layer
  *
@@ -16,7 +16,7 @@ import {
   getSupervisorStatus,
   runSupervisorTickNow,
 } from './SupervisorAgent';
-import { getAllAgentStates } from './IndustryAgent';
+import { getAllAgentStates } from './SiteAgent';
 import { getSupervisorDecisions } from '@/lib/agentDb';
 import { createLogger } from '@/lib/logger';
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import type { IndustryV2, FlexIndex, IndexEvent, AlgoliaEventType, AlgoliaEventSubtype, LLMProviderType } from '@/types';
+import type { SiteConfig, FlexIndex, IndexEvent, AlgoliaEventType, AlgoliaEventSubtype, LLMProviderType } from '@/types';
 
 // ─────────────────────────────────────────────
 // Constants
@@ -83,17 +83,25 @@ interface AlgoliaAppOption {
   hasSearchApiKey: boolean;
 }
 
-interface IndustryForm {
+interface AppConfigStatus {
+  llmProviders?: Array<{ id: string; name: string; type: string; defaultModel: string }>;
+  defaultLlmProviderId?: string;
+  algoliaApps?: Array<{ id: string; name: string; appId: string; hasSearchApiKey: boolean }>;
+  defaultAlgoliaAppId?: string;
+}
+
+interface SiteForm {
   id: string;
   name: string;
   icon: string;
   color: string;
+  siteUrl: string;
   promptPrimary: string;
   promptSelect: string;
   promptSecondary: string;
   indices: IndexForm[];
-  llmProviderId: string;        // '' = use app default
-  algoliaAppConfigId: string;   // '' = use app default
+  llmProviderId: string;      // '' = use app default
+  algoliaAppConfigId: string; // '' = use app default
 }
 
 function uid() {
@@ -121,18 +129,19 @@ function makeIndexForm(role: 'primary' | 'secondary' = 'secondary'): IndexForm {
   };
 }
 
-function industryToForm(ind: IndustryV2): IndustryForm {
+function siteToForm(site: SiteConfig): SiteForm {
   return {
-    id: ind.id,
-    name: ind.name,
-    icon: ind.icon,
-    color: ind.color,
-    promptPrimary: ind.claudePrompts.generatePrimaryQuery,
-    promptSelect: ind.claudePrompts.selectBestResult,
-    promptSecondary: ind.claudePrompts.generateSecondaryQueries,
-    llmProviderId: ind.llmProviderId ?? '',
-    algoliaAppConfigId: ind.algoliaAppConfigId ?? '',
-    indices: ind.indices.map((idx) => ({
+    id: site.id,
+    name: site.name,
+    icon: site.icon,
+    color: site.color,
+    siteUrl: site.siteUrl ?? '',
+    promptPrimary: site.claudePrompts.generatePrimaryQuery,
+    promptSelect: site.claudePrompts.selectBestResult,
+    promptSecondary: site.claudePrompts.generateSecondaryQueries,
+    llmProviderId: site.llmProviderId ?? '',
+    algoliaAppConfigId: site.algoliaAppConfigId ?? '',
+    indices: site.indices.map((idx) => ({
       _key: uid(),
       id: idx.id,
       label: idx.label,
@@ -148,12 +157,13 @@ function industryToForm(ind: IndustryV2): IndustryForm {
   };
 }
 
-function formToIndustry(form: IndustryForm): Omit<IndustryV2, 'isBuiltIn' | 'createdAt' | 'updatedAt'> {
+function formToSite(form: SiteForm): Omit<SiteConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'> {
   return {
     id: form.id.trim().toLowerCase().replace(/\s+/g, '_'),
     name: form.name.trim(),
     icon: form.icon,
     color: form.color,
+    ...(form.siteUrl.trim() ? { siteUrl: form.siteUrl.trim() } : {}),
     claudePrompts: {
       generatePrimaryQuery: form.promptPrimary.trim() || DEFAULT_PROMPTS.generatePrimaryQuery,
       selectBestResult: form.promptSelect.trim() || DEFAULT_PROMPTS.selectBestResult,
@@ -181,9 +191,11 @@ function formToIndustry(form: IndustryForm): Omit<IndustryV2, 'isBuiltIn' | 'cre
 // Props
 // ─────────────────────────────────────────────
 
-interface IndustryEditorProps {
-  industryId?: string;    // undefined = create mode
-  onSaved: (industry: IndustryV2) => void;
+interface SiteEditorProps {
+  siteId?: string;              // undefined = create mode
+  initialSite?: SiteConfig;     // pre-loaded site data — skips the fetch when provided
+  appConfig?: AppConfigStatus;  // pre-loaded app config — skips the /api/app-config fetch
+  onSaved: (site: SiteConfig) => void;
   onClose: () => void;
 }
 
@@ -273,7 +285,6 @@ function IndexEditor({
 
   return (
     <div className="border border-gray-700 rounded-lg bg-gray-800/60 overflow-hidden">
-      {/* Index header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-gray-750 border-b border-gray-700">
         <span className="text-xs font-bold text-gray-400 w-5">{position}</span>
         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${isPrimary ? 'bg-blue-900/60 text-blue-300' : 'bg-gray-700 text-gray-400'}`}>
@@ -309,7 +320,6 @@ function IndexEditor({
         )}
       </div>
 
-      {/* Index body */}
       <div className="p-3 space-y-3">
         <div className="flex gap-2">
           <div className="flex-1">
@@ -332,7 +342,6 @@ function IndexEditor({
           </div>
         </div>
 
-        {/* Events */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-[10px] text-gray-500 uppercase tracking-wider">Events</label>
@@ -380,88 +389,95 @@ const TYPE_ICONS: Record<LLMProviderType, string> = {
   ollama: '🦙',
 };
 
-export default function IndustryEditor({ industryId, onSaved, onClose }: IndustryEditorProps) {
-  const isCreate = !industryId;
+export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, onClose }: SiteEditorProps) {
+  const isCreate = !siteId;
 
   const [showLLM, setShowLLM] = useState(false);
   const [showAlgoliaConfig, setShowAlgoliaConfig] = useState(false);
-  const [availableProviders, setAvailableProviders] = useState<LLMProviderOption[]>([]);
-  const [appDefaultProviderId, setAppDefaultProviderId] = useState<string>('');
-  const [availableAlgoliaApps, setAvailableAlgoliaApps] = useState<AlgoliaAppOption[]>([]);
-  const [appDefaultAlgoliaAppId, setAppDefaultAlgoliaAppId] = useState<string>('');
+  const [availableProviders, setAvailableProviders] = useState<LLMProviderOption[]>(
+    () => (appConfig?.llmProviders ?? []) as LLMProviderOption[]
+  );
+  const [appDefaultProviderId, setAppDefaultProviderId] = useState<string>(
+    () => appConfig?.defaultLlmProviderId ?? ''
+  );
+  const [availableAlgoliaApps, setAvailableAlgoliaApps] = useState<AlgoliaAppOption[]>(
+    () => (appConfig?.algoliaApps ?? []) as AlgoliaAppOption[]
+  );
+  const [appDefaultAlgoliaAppId, setAppDefaultAlgoliaAppId] = useState<string>(
+    () => appConfig?.defaultAlgoliaAppId ?? ''
+  );
 
-  const [form, setForm] = useState<IndustryForm>({
-    id: '',
-    name: '',
-    icon: '🏭',
-    color: 'blue',
-    promptPrimary: DEFAULT_PROMPTS.generatePrimaryQuery,
-    promptSelect: DEFAULT_PROMPTS.selectBestResult,
-    promptSecondary: DEFAULT_PROMPTS.generateSecondaryQueries,
-    llmProviderId: '',
-    algoliaAppConfigId: '',
-    indices: [
-      {
-        _key: uid(),
-        id: 'primary',
-        label: '',
-        indexName: '',
-        role: 'primary',
-        events: [
-          makeEventRow({ eventType: 'click' }),
-          makeEventRow({ eventType: 'view' }),
-          makeEventRow({ eventType: 'conversion' }),
-        ],
-      },
-    ],
+  const [form, setForm] = useState<SiteForm>(() => {
+    if (initialSite) return siteToForm(initialSite);
+    return {
+      id: '',
+      name: '',
+      icon: '🏭',
+      color: 'blue',
+      siteUrl: '',
+      promptPrimary: DEFAULT_PROMPTS.generatePrimaryQuery,
+      promptSelect: DEFAULT_PROMPTS.selectBestResult,
+      promptSecondary: DEFAULT_PROMPTS.generateSecondaryQueries,
+      llmProviderId: '',
+      algoliaAppConfigId: '',
+      indices: [
+        {
+          _key: uid(),
+          id: 'primary',
+          label: '',
+          indexName: '',
+          role: 'primary',
+          events: [
+            makeEventRow({ eventType: 'click' }),
+            makeEventRow({ eventType: 'view' }),
+            makeEventRow({ eventType: 'conversion' }),
+          ],
+        },
+      ],
+    };
   });
 
-  const [loading, setLoading] = useState(!isCreate);
+  // Only show a loading state when we need to fetch (no initialSite provided in edit mode)
+  const [loading, setLoading] = useState(!isCreate && !initialSite);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPrompts, setShowPrompts] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
 
-  // Load available LLM providers and Algolia apps from app config
   useEffect(() => {
+    // Skip fetch if the parent already passed app config
+    if (appConfig) return;
     fetch('/api/app-config')
       .then((r) => r.json())
-      .then((d: {
-        appStatus?: {
-          llmProviders?: LLMProviderOption[];
-          defaultLlmProviderId?: string;
-          algoliaApps?: AlgoliaAppOption[];
-          defaultAlgoliaAppId?: string;
-        };
-      }) => {
-        if (d.appStatus?.llmProviders) {
-          setAvailableProviders(d.appStatus.llmProviders);
+      .then((d: { appStatus?: AppConfigStatus }) => {
+        if (d.appStatus?.llmProviders?.length) {
+          setAvailableProviders(d.appStatus.llmProviders as LLMProviderOption[]);
         }
         if (d.appStatus?.defaultLlmProviderId) {
           setAppDefaultProviderId(d.appStatus.defaultLlmProviderId);
         }
-        if (d.appStatus?.algoliaApps) {
-          setAvailableAlgoliaApps(d.appStatus.algoliaApps);
+        if (d.appStatus?.algoliaApps?.length) {
+          setAvailableAlgoliaApps(d.appStatus.algoliaApps as AlgoliaAppOption[]);
         }
         if (d.appStatus?.defaultAlgoliaAppId) {
           setAppDefaultAlgoliaAppId(d.appStatus.defaultAlgoliaAppId);
         }
       })
       .catch(() => {/* non-critical */});
-  }, []);
+  }, [appConfig]);
 
-  // Load existing industry in edit mode
   useEffect(() => {
-    if (!industryId) return;
-    fetch(`/api/industries/${industryId}`)
+    // Skip fetch if we already have the data from the parent
+    if (!siteId || initialSite) return;
+    fetch(`/api/sites/${siteId}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.industry) setForm(industryToForm(data.industry as IndustryV2));
-        else setError(data.error ?? 'Failed to load industry');
+        if (data.site) setForm(siteToForm(data.site as SiteConfig));
+        else setError(data.error ?? 'Failed to load site');
       })
-      .catch(() => setError('Network error'))
+      .catch((err) => setError(err instanceof Error ? err.message : 'Network error'))
       .finally(() => setLoading(false));
-  }, [industryId]);
+  }, [siteId, initialSite]);
 
   const addIndex = useCallback(() => {
     setForm((f) => ({
@@ -485,8 +501,8 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
   }, []);
 
   const validate = (): string | null => {
-    if (!form.name.trim()) return 'Industry name is required';
-    if (isCreate && !form.id.trim()) return 'Industry ID is required';
+    if (!form.name.trim()) return 'Site name is required';
+    if (isCreate && !form.id.trim()) return 'Site ID is required';
     if (form.indices.length === 0) return 'At least one index is required';
     if (!form.indices.some((i) => i.role === 'primary')) return 'At least one index must be Primary';
     for (const idx of form.indices) {
@@ -503,17 +519,17 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
     setSaving(true);
 
     try {
-      const payload = formToIndustry(form);
+      const payload = formToSite(form);
       let res: Response;
 
       if (isCreate) {
-        res = await fetch('/api/industries', {
+        res = await fetch('/api/sites', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
       } else {
-        res = await fetch(`/api/industries/${industryId}`, {
+        res = await fetch(`/api/sites/${siteId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -524,7 +540,7 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
       if (!res.ok) {
         setError(data.error ?? 'Save failed');
       } else {
-        onSaved(data.industry as IndustryV2);
+        onSaved(data.site as SiteConfig);
       }
     } catch {
       setError('Network error — please try again');
@@ -533,7 +549,6 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
     }
   };
 
-  // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -544,23 +559,20 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
 
   return (
     <div className="fixed inset-0 z-50 flex">
-      {/* Backdrop */}
       <div
         className="flex-1 bg-black/60 cursor-pointer"
         onClick={onClose}
       />
 
-      {/* Drawer */}
       <div className="w-full max-w-2xl bg-gray-900 border-l border-gray-700 flex flex-col overflow-hidden shadow-2xl">
-        {/* Header */}
         <div className={`px-5 py-4 border-b border-gray-700 flex items-center justify-between`}>
           <div>
             <h2 className="text-base font-semibold text-white">
-              {isCreate ? 'Create Industry' : `Edit Industry`}
+              {isCreate ? 'Create Site' : `Edit Site`}
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
               {isCreate
-                ? 'Configure a new industry with custom indices and Algolia events'
+                ? 'Configure a new site with custom indices and Algolia events'
                 : 'Update indices, event names, and Claude prompts'}
             </p>
           </div>
@@ -574,7 +586,6 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
           </button>
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-6">
           {loading ? (
             <div className="flex items-center justify-center py-20 text-gray-500 text-sm">Loading…</div>
@@ -585,9 +596,8 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                 <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Basic Info</h3>
 
                 <div className="grid grid-cols-2 gap-3">
-                  {/* Name */}
                   <div className="col-span-2">
-                    <label className="block text-xs text-gray-400 mb-1">Industry Name <span className="text-rose-400">*</span></label>
+                    <label className="block text-xs text-gray-400 mb-1">Site Name <span className="text-rose-400">*</span></label>
                     <input
                       value={form.name}
                       onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -596,7 +606,6 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                     />
                   </div>
 
-                  {/* ID (create only) */}
                   {isCreate && (
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">ID (slug) <span className="text-rose-400">*</span></label>
@@ -609,11 +618,19 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                     </div>
                   )}
 
+                  <div className={isCreate ? '' : 'col-span-2'}>
+                    <label className="block text-xs text-gray-400 mb-1">Site URL</label>
+                    <input
+                      value={form.siteUrl}
+                      onChange={(e) => setForm({ ...form, siteUrl: e.target.value })}
+                      placeholder="e.g. https://example.com"
+                      className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+                    />
+                  </div>
                 </div>
 
                 {/* Icon + Color */}
                 <div className="flex items-start gap-4">
-                  {/* Icon picker */}
                   <div>
                     <label className="block text-xs text-gray-400 mb-1">Icon</label>
                     <div className="relative">
@@ -639,7 +656,6 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                     </div>
                   </div>
 
-                  {/* Color picker */}
                   <div className="flex-1">
                     <label className="block text-xs text-gray-400 mb-1">Color</label>
                     <div className="flex flex-wrap gap-2">
@@ -751,10 +767,9 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                 {showLLM && (
                   <div className="mt-3 space-y-3">
                     <p className="text-[11px] text-gray-500 bg-gray-800 rounded-lg p-2.5">
-                      Select a specific LLM provider and model for this industry. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
+                      Select a specific LLM provider and model for this site. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
                     </p>
 
-                    {/* Provider selector */}
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Provider</label>
                       {availableProviders.length === 0 ? (
@@ -781,7 +796,6 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                       )}
                     </div>
 
-                    {/* Clear override shortcut */}
                     {form.llmProviderId && (
                       <button
                         type="button"
@@ -820,7 +834,7 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                 {showAlgoliaConfig && (
                   <div className="mt-3 space-y-3">
                     <p className="text-[11px] text-gray-500 bg-gray-800 rounded-lg p-2.5">
-                      Select a specific Algolia application for this industry. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
+                      Select a specific Algolia application for this site. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
                     </p>
 
                     <div>
@@ -861,12 +875,10 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                   </div>
                 )}
               </section>
-
             </>
           )}
         </div>
 
-        {/* Footer */}
         <div className="px-5 py-4 border-t border-gray-700 bg-gray-900 flex items-center gap-3">
           {error && (
             <p className="flex-1 text-xs text-rose-400 bg-rose-900/20 px-3 py-2 rounded-lg border border-rose-800/50 min-w-0 truncate">
@@ -895,7 +907,7 @@ export default function IndustryEditor({ industryId, onSaved, onClose }: Industr
                 Saving…
               </>
             ) : (
-              isCreate ? 'Create Industry' : 'Save Changes'
+              isCreate ? 'Create Site' : 'Save Changes'
             )}
           </button>
         </div>

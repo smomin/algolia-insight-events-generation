@@ -1,18 +1,18 @@
 import { NextResponse } from 'next/server';
-import { getAllIndustries, createIndustry, getPersonas } from '@/lib/industries';
-import type { IndustryV2 } from '@/types';
+import { getAllSites, createSite, getPersonas } from '@/lib/sites';
+import type { SiteConfig } from '@/types';
 
 export async function GET() {
   try {
-    const industries = await getAllIndustries();
+    const sites = await getAllSites();
 
     const result = await Promise.all(
-      industries.map(async (ind) => {
-        const personas = await getPersonas(ind);
+      sites.map(async (site) => {
+        const personas = await getPersonas(site);
         return {
-          ...ind,
+          ...site,
           personaCount: personas.length,
-          indices: ind.indices.map((idx) => ({
+          indices: site.indices.map((idx) => ({
             id: idx.id,
             label: idx.label,
             indexName: idx.indexName,
@@ -24,7 +24,7 @@ export async function GET() {
       })
     );
 
-    return NextResponse.json({ industries: result });
+    return NextResponse.json({ sites: result });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -34,7 +34,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as Partial<
-      Omit<IndustryV2, 'isBuiltIn' | 'createdAt' | 'updatedAt'>
+      Omit<SiteConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'>
     >;
 
     if (!body.id || !body.name || !body.indices || body.indices.length === 0) {
@@ -51,11 +51,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const industry = await createIndustry({
+    const site = await createSite({
       id: body.id,
       name: body.name,
       icon: body.icon ?? '🏭',
       color: body.color ?? 'blue',
+      ...(body.siteUrl ? { siteUrl: body.siteUrl } : {}),
       indices: body.indices,
       claudePrompts: body.claudePrompts ?? {
         generatePrimaryQuery:
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
       ...(body.algoliaAppConfigId ? { algoliaAppConfigId: body.algoliaAppConfigId } : {}),
     });
 
-    return NextResponse.json({ industry }, { status: 201 });
+    return NextResponse.json({ site }, { status: 201 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });

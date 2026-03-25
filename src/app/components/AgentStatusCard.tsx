@@ -3,12 +3,13 @@
 import type { AgentState, AgentPhase } from '@/types';
 
 interface Props {
-  industryName: string;
-  industryIcon: string;
-  industryColor: string;
+  siteName: string;
+  siteIcon: string;
+  siteColor: string;
   state: AgentState;
   dailyTarget: number;
   personaCount?: number;
+  onEdit?: () => void;
 }
 
 const PHASE_LABEL: Record<AgentPhase, string> = {
@@ -56,12 +57,13 @@ const BAR_COLOR: Record<string, string> = {
 };
 
 export default function AgentStatusCard({
-  industryName,
-  industryIcon,
-  industryColor,
+  siteName,
+  siteIcon,
+  siteColor,
   state,
   dailyTarget,
   personaCount,
+  onEdit,
 }: Props) {
   const progressPct =
     dailyTarget > 0 ? Math.min(100, Math.round((state.eventsSentToday / dailyTarget) * 100)) : 0;
@@ -73,8 +75,8 @@ export default function AgentStatusCard({
 
   const phaseColorClass = PHASE_COLOR[state.phase] ?? PHASE_COLOR.idle;
   const isPulsing = PHASE_PULSE[state.phase];
-  const barColor = BAR_COLOR[industryColor] ?? 'bg-blue-500';
-  const accentColor = ACCENT[industryColor] ?? 'text-blue-400';
+  const barColor = BAR_COLOR[siteColor] ?? 'bg-blue-500';
+  const accentColor = ACCENT[siteColor] ?? 'text-blue-400';
 
   return (
     <div className={`bg-slate-800/60 border rounded-xl p-4 flex flex-col gap-3 transition-all ${
@@ -82,10 +84,24 @@ export default function AgentStatusCard({
     }`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="text-xl">{industryIcon}</span>
-          <div>
-            <p className={`text-sm font-semibold ${accentColor}`}>{industryName}</p>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xl shrink-0">{siteIcon}</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <p className={`text-sm font-semibold truncate ${accentColor}`}>{siteName}</p>
+              {onEdit && (
+                <button
+                  onClick={onEdit}
+                  title="Edit site"
+                  className="shrink-0 text-slate-600 hover:text-slate-300 transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+              )}
+            </div>
             <p className="text-[10px] text-slate-500 mt-0.5">
               {state.isActive ? 'Agent active' : 'Agent standby'}
             </p>
@@ -93,7 +109,7 @@ export default function AgentStatusCard({
         </div>
         {/* Phase badge */}
         <span
-          className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-lg border whitespace-nowrap ${phaseColorClass}`}
+          className={`inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-1 rounded-lg border whitespace-nowrap shrink-0 ${phaseColorClass}`}
         >
           {isPulsing && (
             <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
@@ -109,7 +125,7 @@ export default function AgentStatusCard({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
-          <span className="text-[10px] text-amber-400">No personas — add some in Industries tab</span>
+          <span className="text-[10px] text-amber-400">No personas — add some in Sites tab</span>
         </div>
       )}
       {personaCount !== undefined && personaCount > 0 && !state.currentPersonaName && (

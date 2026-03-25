@@ -6,7 +6,7 @@ interface SessionNotification {
   personaId: string;
   personaName?: string;
   totalEvents: number;
-  industryId?: string;
+  siteId?: string;
   error?: string;
   timestamp: number;
 }
@@ -41,8 +41,8 @@ export default function SessionCard({ session }: SessionCardProps) {
             <p className="text-xs text-slate-500">
               {new Date(session.timestamp).toLocaleTimeString()} ·{' '}
               {session.personaName ?? session.personaId}
-              {session.industryId && (
-                <span className="ml-2 text-slate-600">· {session.industryId}</span>
+              {session.siteId && (
+                <span className="ml-2 text-slate-600">· {session.siteId}</span>
               )}
             </p>
           </div>

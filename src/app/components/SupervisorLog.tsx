@@ -58,8 +58,8 @@ export default function SupervisorLog({ decisions, isRunning, lastRunAt }: Props
             <div key={d.id} className="px-4 py-3 hover:bg-slate-700/20 transition-colors">
               <div className="flex items-start justify-between gap-3 mb-1.5">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-base shrink-0">{getIndustryIcon(d.industryName)}</span>
-                  <span className="text-sm text-slate-200 font-medium truncate">{d.industryName}</span>
+                  <span className="text-base shrink-0">{getSiteIcon(d.siteName ?? (d as unknown as Record<string, string>).industryName)}</span>
+                  <span className="text-sm text-slate-200 font-medium truncate">{d.siteName ?? (d as unknown as Record<string, string>).industryName}</span>
                   <span className={`shrink-0 inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full border ${URGENCY_STYLES[d.urgency]}`}>
                     <span className={`w-1.5 h-1.5 rounded-full ${URGENCY_DOT[d.urgency]}`} />
                     {d.urgency.toUpperCase()}
@@ -97,7 +97,8 @@ export default function SupervisorLog({ decisions, isRunning, lastRunAt }: Props
   );
 }
 
-function getIndustryIcon(name: string): string {
+function getSiteIcon(name: string | undefined): string {
+  if (!name) return '🏭';
   const n = name.toLowerCase();
   if (n.includes('grocery') || n.includes('food')) return '🛒';
   if (n.includes('travel') || n.includes('hotel')) return '✈️';

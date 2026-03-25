@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { Persona } from '@/types';
 
 interface GeneratePersonasModalProps {
-  industryId: string;
-  industryName: string;
+  siteId: string;
+  siteName: string;
   onComplete: (newPersonas: Persona[]) => void;
   onClose: () => void;
 }
@@ -26,8 +26,8 @@ const PHASE_LABELS: Record<Phase, string> = {
 };
 
 export default function GeneratePersonasModal({
-  industryId,
-  industryName,
+  siteId,
+  siteName,
   onComplete,
   onClose,
 }: GeneratePersonasModalProps) {
@@ -65,13 +65,13 @@ export default function GeneratePersonasModal({
     setPhase('sampling');
     setLog([]);
     setResult(null);
-    addLog('info', `Fetching sample records from indices for "${industryName}"…`);
+    addLog('info', `Fetching sample records from indices for "${siteName}"…`);
 
     try {
       setPhase('generating');
       addLog('info', `Asking Claude to generate ${count} personas…`);
 
-      const res = await fetch(`/api/industries/${industryId}/generate-personas`, {
+      const res = await fetch(`/api/sites/${siteId}/generate-personas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ count, append }),
@@ -99,7 +99,7 @@ export default function GeneratePersonasModal({
       }
 
       addLog('success', `Generated ${data.generated?.length ?? 0} personas`);
-      addLog('info', `Total personas for industry: ${data.total ?? 0}`);
+      addLog('info', `Total personas for site: ${data.total ?? 0}`);
 
       setResult({
         generated: data.generated ?? [],
@@ -137,7 +137,7 @@ export default function GeneratePersonasModal({
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
           <div>
             <h2 className="text-lg font-semibold text-white">Generate Personas</h2>
-            <p className="text-xs text-slate-400 mt-0.5">{industryName}</p>
+            <p className="text-xs text-slate-400 mt-0.5">{siteName}</p>
           </div>
           {!isRunning && (
             <button
@@ -297,7 +297,7 @@ export default function GeneratePersonasModal({
                     ))}
                   </div>
                   <p className="text-xs text-slate-500 pt-1 border-t border-slate-700">
-                    Total personas for this industry: {result.total}
+                    Total personas for this site: {result.total}
                   </p>
                 </div>
               )}

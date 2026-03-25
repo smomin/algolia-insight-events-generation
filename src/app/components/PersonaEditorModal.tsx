@@ -9,7 +9,7 @@ import type { Persona } from '@/types';
 
 interface PersonaEditorModalProps {
   persona: Persona;
-  industryId: string;
+  siteId: string;
   onSaved: (updated: Persona) => void;
   onDeleted: (personaId: string) => void;
   onClose: () => void;
@@ -23,7 +23,7 @@ interface ExtraField {
 
 // Known standard fields rendered individually
 const STANDARD_KEYS = new Set([
-  'id', 'name', 'userToken', 'description', 'industry',
+  'id', 'name', 'userToken', 'description', 'site',
   'skill', 'budget', 'tags',
   'cookingSkill', 'dietaryPreferences', 'favoriteCuisines',
   'avoids', 'householdSize', 'timeConstraint', 'shoppingFrequency',
@@ -48,7 +48,7 @@ function tagsFromString(s: string): string[] {
 
 export default function PersonaEditorModal({
   persona,
-  industryId,
+  siteId,
   onSaved,
   onDeleted,
   onClose,
@@ -108,7 +108,7 @@ export default function PersonaEditorModal({
         ...extraObj,
       };
 
-      const res = await fetch(`/api/industries/${industryId}/personas`, {
+      const res = await fetch(`/api/sites/${siteId}/personas`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated),
@@ -129,7 +129,7 @@ export default function PersonaEditorModal({
     setError(null);
     try {
       const res = await fetch(
-        `/api/industries/${industryId}/personas?personaId=${encodeURIComponent(persona.id)}`,
+        `/api/sites/${siteId}/personas?personaId=${encodeURIComponent(persona.id)}`,
         { method: 'DELETE' }
       );
       const data = (await res.json()) as { ok?: boolean; error?: string };

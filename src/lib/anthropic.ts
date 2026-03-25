@@ -6,18 +6,18 @@ import { createLogger } from './logger';
 const log = createLogger('Anthropic');
 
 // ─────────────────────────────────────────────
-// Generic functions — driven by industry prompts
+// Generic functions — driven by site prompts
 // ─────────────────────────────────────────────
 
 export async function generatePrimaryQuery(
   persona: Persona,
   promptInstruction: string,
-  industryId?: string,
+  siteId?: string,
   recentQueries?: string[]
 ): Promise<string> {
   log.debug('generatePrimaryQuery', {
     persona: persona.name,
-    industryId,
+    siteId,
     recentQueryCount: recentQueries?.length ?? 0,
   });
 
@@ -32,7 +32,7 @@ export async function generatePrimaryQuery(
   const query = await callLLM(
     [{ role: 'user', content: userContent }],
     { systemPrompt: promptInstruction, maxTokens: 100 },
-    industryId
+    siteId
   );
 
   log.debug('generatePrimaryQuery result', { persona: persona.name, query });
@@ -82,9 +82,9 @@ export async function selectBestResult(
   persona: Persona,
   hits: AlgoliaHit[],
   promptInstruction: string,
-  industryId?: string
+  siteId?: string
 ): Promise<{ index: number; reason: string }> {
-  log.debug('selectBestResult', { persona: persona.name, hitCount: hits.length, industryId });
+  log.debug('selectBestResult', { persona: persona.name, hitCount: hits.length, siteId });
 
   const resultList = hits.map((h, i) => ({ index: i, ...summarizeHit(h) }));
 
@@ -96,7 +96,7 @@ export async function selectBestResult(
       },
     ],
     { systemPrompt: promptInstruction, maxTokens: 200 },
-    industryId
+    siteId
   );
 
   const cleaned = text
@@ -122,14 +122,14 @@ export async function generateSecondaryQueries(
   primaryHit: AlgoliaHit,
   persona: Persona,
   promptInstruction: string,
-  industryId?: string,
+  siteId?: string,
   secondaryIndices?: Array<{ id: string; label: string }>
 ): Promise<string[]> {
   log.debug('generateSecondaryQueries', {
     persona: persona.name,
     primaryObjectID: primaryHit.objectID,
     secondaryIndices: secondaryIndices?.map((s) => s.label),
-    industryId,
+    siteId,
   });
   const hitSummary = summarizeHit(primaryHit);
 
@@ -146,7 +146,7 @@ export async function generateSecondaryQueries(
       },
     ],
     { systemPrompt: promptInstruction, maxTokens: 300 },
-    industryId
+    siteId
   );
 
   const cleaned = raw
@@ -180,12 +180,12 @@ export interface IndexSample {
   sampleRecords: AlgoliaHit[];
 }
 
-export async function generatePersonasForIndustry(
-  industryName: string,
+export async function generatePersonasForSite(
+  siteName: string,
   indexSamples: IndexSample[],
   count: number,
   existingPersonaNames: string[],
-  industryId?: string,
+  siteId?: string,
   llmProviderIdOverride?: string
 ): Promise<Persona[]> {
   const indexContext = indexSamples.map(({ label, role, sampleRecords }) => {
@@ -230,7 +230,7 @@ export async function generatePersonasForIndustry(
 
   const systemPrompt = `You are a UX research expert generating realistic synthetic user personas for an e-commerce and search analytics simulation system.
 
-You will be given information about an industry and sample records from its Algolia search indices. Generate ${count} diverse, realistic personas who would realistically search and interact with this content.
+You will be given information about a site and sample records from its Algolia search indices. Generate ${count} diverse, realistic personas who would realistically search and interact with this content.
 
 Return ONLY a valid JSON array. No markdown, no code fences, no explanation. Each persona object must have exactly these fields:
 - "id": unique kebab-case slug (e.g. "budget-conscious-traveler-1")
@@ -240,19 +240,19 @@ Return ONLY a valid JSON array. No markdown, no code fences, no explanation. Eac
 - "skill": one of "beginner", "intermediate", "advanced"
 - "budget": one of "low", "medium", "high"
 - "tags": array of 3-5 relevant strings (interests, preferences, behaviors)
-- any 2-4 additional domain-specific fields relevant to this industry (e.g. travelStyle, investmentGoal, fitnessLevel — choose field names that make sense)
+- any 2-4 additional domain-specific fields relevant to this site (e.g. travelStyle, investmentGoal, fitnessLevel — choose field names that make sense)
 
 Personas must be diverse across skill level, budget, age groups, and use cases. Make them feel like real, distinct people.${avoidNames}`;
 
-  const userMessage = `Industry: ${industryName}
+  const userMessage = `Site: ${siteName}
 
 Sample data from configured indices:
-${indexContext || 'No sample records available — generate plausible personas based on the industry name alone.'}`;
+${indexContext || 'No sample records available — generate plausible personas based on the site name alone.'}`;
 
   const raw = await callLLM(
     [{ role: 'user', content: userMessage }],
     { systemPrompt, maxTokens: 4000, providerIdOverride: llmProviderIdOverride },
-    industryId
+    siteId
   );
 
   const cleaned = raw

@@ -14,10 +14,10 @@ export interface AlgoliaHit {
   [key: string]: unknown;
 }
 
-async function getClient(industryId?: string) {
-  const creds = await resolveCredentials(industryId);
+async function getClient(siteId?: string) {
+  const creds = await resolveCredentials(siteId);
   if (!creds.algoliaAppId || !creds.algoliaSearchApiKey) {
-    log.error('missing credentials — set them in App Settings', { industryId });
+    log.error('missing credentials — set them in App Settings', { siteId });
   }
   return algoliasearch(creds.algoliaAppId, creds.algoliaSearchApiKey);
 }
@@ -27,11 +27,11 @@ export async function searchIndex(
   query: string,
   userToken: string,
   hitsPerPage = 10,
-  industryId?: string
+  siteId?: string
 ): Promise<SearchResult> {
-  log.debug('search', { indexName, query, userToken, hitsPerPage, industryId });
+  log.debug('search', { indexName, query, userToken, hitsPerPage, siteId });
   const start = Date.now();
-  const client = await getClient(industryId);
+  const client = await getClient(siteId);
 
   try {
     const response = await client.searchSingleIndex({
@@ -71,11 +71,11 @@ export async function searchIndex(
 export async function sampleIndex(
   indexName: string,
   hitsPerPage = 20,
-  industryId?: string
+  siteId?: string
 ): Promise<AlgoliaHit[]> {
   if (!indexName) return [];
-  log.debug('sample index', { indexName, hitsPerPage, industryId });
-  const client = await getClient(industryId);
+  log.debug('sample index', { indexName, hitsPerPage, siteId });
+  const client = await getClient(siteId);
   try {
     const response = await client.searchSingleIndex({
       indexName,

@@ -3,10 +3,10 @@ import {
   isSchedulerRunning,
   isDistributing,
   getCurrentRun,
-  getNextRunTimeForIndustry,
+  getNextRunTimeForSite,
 } from '@/lib/scheduler';
 import { getTodayCounters, getLastSchedulerRun, getDistributionState, setDistributionActive } from '@/lib/db';
-import { getAllIndustries, getEventLimit } from '@/lib/industries';
+import { getAllSites, getEventLimit } from '@/lib/sites';
 
 // If the persisted state claims a run is active but in-memory says otherwise
 // and the run started more than this many ms ago, treat it as stale and auto-clear.
@@ -15,55 +15,51 @@ const STALE_DISTRIBUTION_MS = 10 * 60 * 1000; // 10 minutes
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const industryId = searchParams.get('industryId');
+    const siteId = searchParams.get('siteId');
 
     const limit = getEventLimit();
-    const industries = await getAllIndustries();
+    const sites = await getAllSites();
 
     const allStatus: Record<string, unknown> = {};
     await Promise.all(
-      industries.map(async (industry) => {
+      sites.map(async (site) => {
         const [counters, lastRun, distState] = await Promise.all([
-          getTodayCounters(industry.id),
-          getLastSchedulerRun(industry.id),
-          getDistributionState(industry.id),
+          getTodayCounters(site.id),
+          getLastSchedulerRun(site.id),
+          getDistributionState(site.id),
         ]);
         // Auto-clear stale persisted distribution state.
-        // If DB says "distributing" but in-memory says no and it started >10 min ago,
-        // the process was killed or hot-reloaded mid-run without cleanup.
         let effectiveDistState = distState;
         if (
           distState.isDistributing &&
-          !isDistributing(industry.id) &&
+          !isDistributing(site.id) &&
           distState.startedAt &&
           Date.now() - new Date(distState.startedAt).getTime() > STALE_DISTRIBUTION_MS
         ) {
-          await setDistributionActive(industry.id, distState.runId ?? '', false);
+          await setDistributionActive(site.id, distState.runId ?? '', false);
           effectiveDistState = { isDistributing: false, cancelRequested: false };
         }
 
-        // Merge in-memory and persisted state: if either says distributing, show as active.
-        // This keeps status correct after hot reloads.
-        const distributing = isDistributing(industry.id) || effectiveDistState.isDistributing;
-        allStatus[industry.id] = {
-          industryId: industry.id,
-          name: industry.name,
-          icon: industry.icon,
-          color: industry.color,
-          isRunning: isSchedulerRunning(industry.id),
+        const distributing = isDistributing(site.id) || effectiveDistState.isDistributing;
+        allStatus[site.id] = {
+          siteId: site.id,
+          name: site.name,
+          icon: site.icon,
+          color: site.color,
+          isRunning: isSchedulerRunning(site.id),
           isDistributing: distributing,
           cancelRequested: effectiveDistState.cancelRequested,
-          nextRun: getNextRunTimeForIndustry(industry.id),
+          nextRun: getNextRunTimeForSite(site.id),
           counters,
           eventLimit: limit,
           lastRun,
-          currentRun: getCurrentRun(industry.id),
+          currentRun: getCurrentRun(site.id),
         };
       })
     );
 
-    if (industryId && allStatus[industryId]) {
-      return NextResponse.json({ ...allStatus[industryId], all: allStatus });
+    if (siteId && allStatus[siteId]) {
+      return NextResponse.json({ ...allStatus[siteId], all: allStatus });
     }
 
     return NextResponse.json({ all: allStatus });

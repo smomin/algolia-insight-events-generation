@@ -5,7 +5,7 @@ import { useSSE } from '@/app/hooks/useSSE';
 
 interface SessionRecord {
   id: string;
-  industryId: string;
+  siteId: string;
   personaId: string;
   personaName: string;
   startedAt: string;
@@ -17,7 +17,7 @@ interface SessionRecord {
 }
 
 interface SessionHistoryProps {
-  industryId: string;
+  siteId: string;
   isActive?: boolean; // true while a distribution run is in progress (for LIVE badge)
 }
 
@@ -31,13 +31,13 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString();
 }
 
-export default function SessionHistory({ industryId, isActive = false }: SessionHistoryProps) {
+export default function SessionHistory({ siteId, isActive = false }: SessionHistoryProps) {
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // ── SSE — receive initial snapshot + live session records ────────────
-  const sseUrl = `/api/stream?industryId=${industryId}&types=session`;
+  const sseUrl = `/api/stream?siteId=${siteId}&types=session`;
 
   useSSE(sseUrl, ['session'], (_, rawData) => {
     const data = rawData as {
@@ -58,7 +58,7 @@ export default function SessionHistory({ industryId, isActive = false }: Session
   // ── Manual refresh (one-time REST fetch) ─────────────────────────────
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch(`/api/sessions?industryId=${industryId}&limit=50`);
+      const res = await fetch(`/api/sessions?siteId=${siteId}&limit=50`);
       if (res.ok) {
         const data = await res.json();
         setSessions(data.sessions ?? []);
@@ -67,12 +67,12 @@ export default function SessionHistory({ industryId, isActive = false }: Session
     } catch {
       /* ignore */
     }
-  }, [industryId]);
+  }, [siteId]);
 
   const handleClear = async () => {
     setLoading(true);
     try {
-      await fetch(`/api/sessions?industryId=${industryId}`, { method: 'DELETE' });
+      await fetch(`/api/sessions?siteId=${siteId}`, { method: 'DELETE' });
       setSessions([]);
     } finally {
       setLoading(false);

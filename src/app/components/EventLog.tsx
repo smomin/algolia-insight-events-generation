@@ -5,7 +5,7 @@ import type { SentEvent, SessionRecord } from '@/types';
 import { useSSE } from '@/app/hooks/useSSE';
 
 interface EventLogProps {
-  industryId: string;
+  siteId: string;
 }
 
 const EVENT_TYPE_STYLE: Record<string, string> = {
@@ -92,14 +92,14 @@ function EventsTable({ events }: { events: SentEvent[] }) {
   );
 }
 
-export default function EventLog({ industryId }: EventLogProps) {
+export default function EventLog({ siteId }: EventLogProps) {
   const [events, setEvents] = useState<SentEvent[]>([]);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  const sseUrl = `/api/stream?industryId=${industryId}&types=event-log,session`;
+  const sseUrl = `/api/stream?siteId=${siteId}&types=event-log,session`;
 
   useSSE(sseUrl, ['event-log', 'session'], (type, rawData) => {
     if (type === 'event-log') {
@@ -155,8 +155,8 @@ export default function EventLog({ industryId }: EventLogProps) {
   const fetchLog = useCallback(async () => {
     try {
       const [logRes, sessRes] = await Promise.all([
-        fetch(`/api/event-log?industryId=${industryId}`),
-        fetch(`/api/sessions?industryId=${industryId}&limit=200`),
+        fetch(`/api/event-log?siteId=${siteId}`),
+        fetch(`/api/sessions?siteId=${siteId}&limit=200`),
       ]);
       if (logRes.ok) {
         const data = await logRes.json();
@@ -170,12 +170,12 @@ export default function EventLog({ industryId }: EventLogProps) {
     } catch {
       /* ignore */
     }
-  }, [industryId]);
+  }, [siteId]);
 
   const handleClear = async () => {
     setLoading(true);
     try {
-      await fetch(`/api/event-log?industryId=${industryId}`, { method: 'DELETE' });
+      await fetch(`/api/event-log?siteId=${siteId}`, { method: 'DELETE' });
       setEvents([]);
     } finally {
       setLoading(false);

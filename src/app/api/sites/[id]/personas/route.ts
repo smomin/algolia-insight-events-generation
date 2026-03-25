@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getIndustry, getPersonas, savePersonas } from '@/lib/industries';
+import { getSite, getPersonas, savePersonas } from '@/lib/sites';
 import type { Persona } from '@/types';
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -7,25 +7,25 @@ type Ctx = { params: Promise<{ id: string }> };
 export async function GET(_req: Request, { params }: Ctx) {
   try {
     const { id } = await params;
-    const industry = await getIndustry(id);
-    if (!industry) {
-      return NextResponse.json({ error: 'Industry not found' }, { status: 404 });
+    const site = await getSite(id);
+    if (!site) {
+      return NextResponse.json({ error: 'Site not found' }, { status: 404 });
     }
-    const personas = await getPersonas(industry);
-    return NextResponse.json({ personas, industryId: id });
+    const personas = await getPersonas(site);
+    return NextResponse.json({ personas, siteId: id });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
-/** PUT /api/industries/[id]/personas — upsert a single persona by id */
+/** PUT /api/sites/[id]/personas — upsert a single persona by id */
 export async function PUT(req: Request, { params }: Ctx) {
   try {
     const { id } = await params;
-    const industry = await getIndustry(id);
-    if (!industry) {
-      return NextResponse.json({ error: 'Industry not found' }, { status: 404 });
+    const site = await getSite(id);
+    if (!site) {
+      return NextResponse.json({ error: 'Site not found' }, { status: 404 });
     }
 
     const incoming = (await req.json()) as Persona;
@@ -33,7 +33,7 @@ export async function PUT(req: Request, { params }: Ctx) {
       return NextResponse.json({ error: 'Persona id is required' }, { status: 400 });
     }
 
-    const existing = await getPersonas(industry);
+    const existing = await getPersonas(site);
     const idx = existing.findIndex((p) => p.id === incoming.id);
     const updated =
       idx >= 0
@@ -48,7 +48,7 @@ export async function PUT(req: Request, { params }: Ctx) {
   }
 }
 
-/** DELETE /api/industries/[id]/personas?personaId=xxx — remove a single persona */
+/** DELETE /api/sites/[id]/personas?personaId=xxx — remove a single persona */
 export async function DELETE(req: Request, { params }: Ctx) {
   try {
     const { id } = await params;
@@ -58,12 +58,12 @@ export async function DELETE(req: Request, { params }: Ctx) {
       return NextResponse.json({ error: 'personaId query param required' }, { status: 400 });
     }
 
-    const industry = await getIndustry(id);
-    if (!industry) {
-      return NextResponse.json({ error: 'Industry not found' }, { status: 404 });
+    const site = await getSite(id);
+    if (!site) {
+      return NextResponse.json({ error: 'Site not found' }, { status: 404 });
     }
 
-    const existing = await getPersonas(industry);
+    const existing = await getPersonas(site);
     const filtered = existing.filter((p) => p.id !== personaId);
     if (filtered.length === existing.length) {
       return NextResponse.json({ error: 'Persona not found' }, { status: 404 });

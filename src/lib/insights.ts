@@ -21,16 +21,16 @@ function randomFloat(min: number, max: number): number {
 
 export async function sendEvents(
   events: InsightEvent[],
-  industryId?: string
+  siteId?: string
 ): Promise<number> {
-  const creds = await resolveCredentials(industryId);
+  const creds = await resolveCredentials(siteId);
   if (!creds.algoliaAppId || !creds.algoliaSearchApiKey) {
-    log.error('sendEvents: missing Algolia credentials — set them in App Settings', { industryId });
+    log.error('sendEvents: missing Algolia credentials — set them in App Settings', { siteId });
     return 401;
   }
 
   const eventSummary = events.map((e) => ({ type: e.eventType, name: e.eventName, index: e.index }));
-  log.debug('sendEvents', { industryId, eventCount: events.length, endpoint: INSIGHTS_ENDPOINT, events: eventSummary });
+  log.debug('sendEvents', { siteId, eventCount: events.length, endpoint: INSIGHTS_ENDPOINT, events: eventSummary });
 
   const start = Date.now();
   try {
@@ -45,19 +45,19 @@ export async function sendEvents(
     });
 
     log.debug('sendEvents response', {
-      industryId,
+      siteId,
       status: response.status,
       durationMs: Date.now() - start,
     });
 
     if (response.status !== 200) {
       const body = await response.text().catch(() => '');
-      log.warn('sendEvents non-200 response', { industryId, status: response.status, body: body.slice(0, 200) });
+      log.warn('sendEvents non-200 response', { siteId, status: response.status, body: body.slice(0, 200) });
     }
 
     return response.status;
   } catch (err) {
-    log.error('sendEvents fetch failed', { industryId, error: err instanceof Error ? err.message : String(err) });
+    log.error('sendEvents fetch failed', { siteId, error: err instanceof Error ? err.message : String(err) });
     throw err;
   }
 }
@@ -192,7 +192,7 @@ export function toSentEvents(
   events: InsightEvent[],
   status: number,
   meta?: {
-    industryId?: string;
+    siteId?: string;
     personaId?: string;
     personaName?: string;
     sessionId?: string;

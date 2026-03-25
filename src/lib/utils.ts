@@ -1,7 +1,7 @@
 /**
  * Shared utility functions used across scheduler, agent, and insights modules.
  * Extracted to avoid duplication — these were previously copy-pasted into
- * scheduler.ts, IndustryAgent.ts, SupervisorAgent.ts, and insights.ts.
+ * scheduler.ts, SiteAgent.ts, SupervisorAgent.ts, and insights.ts.
  */
 
 /** Fisher-Yates shuffle — returns a new shuffled array, does not mutate the input. */

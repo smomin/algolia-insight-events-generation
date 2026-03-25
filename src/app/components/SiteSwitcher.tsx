@@ -15,7 +15,7 @@ const COLOR_MAP: Record<string, { tab: string; active: string; dot: string }> = 
   red:     { tab: 'border-red-500 text-red-400',         active: 'bg-red-500/10',        dot: 'bg-red-400' },
 };
 
-export interface IndustrySummary {
+export interface SiteSummary {
   id: string;
   name: string;
   icon: string;
@@ -24,48 +24,48 @@ export interface IndustrySummary {
 }
 
 export interface RunningStatus {
-  [industryId: string]: {
+  [siteId: string]: {
     isRunning: boolean;
     isDistributing: boolean;
   };
 }
 
-interface IndustrySwitcherProps {
-  industries: IndustrySummary[];
-  activeIndustry: string;
+interface SiteSwitcherProps {
+  sites: SiteSummary[];
+  activeSite: string;
   runningStatus: RunningStatus;
   onSwitch: (id: string) => void;
 }
 
-export default function IndustrySwitcher({
-  industries,
-  activeIndustry,
+export default function SiteSwitcher({
+  sites,
+  activeSite,
   runningStatus,
   onSwitch,
-}: IndustrySwitcherProps) {
+}: SiteSwitcherProps) {
   return (
     <div className="flex items-center gap-1 overflow-x-auto pb-1">
-      {industries.map((industry) => {
-        const colors = COLOR_MAP[industry.color] ?? COLOR_MAP.blue;
-        const isActive = activeIndustry === industry.id;
-        const status = runningStatus[industry.id];
+      {sites.map((site) => {
+        const colors = COLOR_MAP[site.color] ?? COLOR_MAP.blue;
+        const isActive = activeSite === site.id;
+        const status = runningStatus[site.id];
         const isRunning = status?.isRunning;
         const isWorking = status?.isDistributing;
 
         return (
           <button
-            key={industry.id}
-            onClick={() => onSwitch(industry.id)}
+            key={site.id}
+            onClick={() => onSwitch(site.id)}
             className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium whitespace-nowrap transition-all border ${
               isActive
                 ? `${colors.tab} ${colors.active} border-current`
                 : 'border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500'
             }`}
           >
-            <span className="text-base leading-none">{industry.icon}</span>
-            <span>{industry.name}</span>
+            <span className="text-base leading-none">{site.icon}</span>
+            <span>{site.name}</span>
             <span className="text-[10px] text-slate-500 font-normal">
-              ({industry.personaCount})
+              ({site.personaCount})
             </span>
             {(isRunning || isWorking) && (
               <span

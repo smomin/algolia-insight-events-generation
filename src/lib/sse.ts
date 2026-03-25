@@ -13,21 +13,21 @@ if (!g._sseEmitter) {
 const emitter = g._sseEmitter;
 
 /**
- * Emit an event for a specific industry channel.
+ * Emit an event for a specific site channel.
  * For 'status' events, also broadcasts a lightweight update to the '_global'
  * channel so page.tsx can update the header running-dots without subscribing
- * to every industry individually.
+ * to every site individually.
  */
-export function emitToIndustry(
-  industryId: string,
+export function emitToSite(
+  siteId: string,
   type: SSEEventType,
   data: unknown
 ): void {
-  emitter.emit(`${industryId}:${type}`, data);
+  emitter.emit(`${siteId}:${type}`, data);
   if (type === 'status') {
     const d = data as { isRunning?: boolean; isDistributing?: boolean };
     emitter.emit('_global:status', {
-      industryId,
+      siteId,
       isRunning: d.isRunning ?? false,
       isDistributing: d.isDistributing ?? false,
     });
@@ -35,18 +35,18 @@ export function emitToIndustry(
 }
 
 /**
- * Subscribe to SSE events for an industry channel.
- * Pass '_global' as industryId to receive cross-industry status updates.
+ * Subscribe to SSE events for a site channel.
+ * Pass '_global' as siteId to receive cross-site status updates.
  * Returns an unsubscribe / cleanup function.
  */
 export function subscribeToStream(
-  industryId: string,
+  siteId: string,
   types: SSEEventType[],
   handler: (type: SSEEventType, data: unknown) => void
 ): () => void {
   const cleanups: Array<() => void> = [];
   for (const type of types) {
-    const channel = `${industryId}:${type}`;
+    const channel = `${siteId}:${type}`;
     const fn = (data: unknown) => handler(type, data);
     emitter.on(channel, fn);
     cleanups.push(() => emitter.off(channel, fn));

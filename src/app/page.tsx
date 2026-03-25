@@ -7,17 +7,17 @@ import PersonaSelector from './components/PersonaSelector';
 import EventLog from './components/EventLog';
 import SessionCard from './components/SessionCard';
 import SessionHistory from './components/SessionHistory';
-import IndustrySwitcher, {
-  type IndustrySummary,
+import SiteSwitcher, {
+  type SiteSummary,
   type RunningStatus,
-} from './components/IndustrySwitcher';
-import IndustryEditor from './components/IndustryEditor';
+} from './components/SiteSwitcher';
+import SiteEditor from './components/SiteEditor';
 import AppConfigPanel from './components/AppConfigPanel';
 import AgentDashboard from './components/AgentDashboard';
 import { useSSE } from './hooks/useSSE';
-import type { Persona, IndustryV2 } from '@/types';
+import type { Persona, SiteConfig } from '@/types';
 
-type MainView = 'industries' | 'agents';
+type MainView = 'sites' | 'agents';
 
 // ─────────────────────────────────────────────
 // Types
@@ -27,13 +27,13 @@ interface SessionNotification {
   personaId: string;
   personaName?: string;
   totalEvents: number;
-  industryId?: string;
+  siteId?: string;
   error?: string;
   timestamp: number;
 }
 
-// Industry as returned by /api/industries (includes personaCount)
-interface IndustryListItem extends IndustryV2 {
+// Site as returned by /api/sites (includes personaCount)
+interface SiteListItem extends SiteConfig {
   personaCount: number;
 }
 
@@ -88,40 +88,40 @@ const DOT: Record<string, string> = {
 // ─────────────────────────────────────────────
 
 export default function Home() {
-  const [mainView, setMainView] = useState<MainView>('industries');
-  const [industries, setIndustries] = useState<IndustryListItem[]>([]);
-  const [personasByIndustry, setPersonasByIndustry] = useState<Record<string, Persona[]>>({});
-  const [activeIndustry, setActiveIndustry] = useState<string>(
+  const [mainView, setMainView] = useState<MainView>('sites');
+  const [sites, setSites] = useState<SiteListItem[]>([]);
+  const [personasBySite, setPersonasBySite] = useState<Record<string, Persona[]>>({});
+  const [activeSite, setActiveSite] = useState<string>(
     process.env.NEXT_PUBLIC_DEFAULT_INDUSTRY_ID ?? 'grocery'
   );
   const [latestSession, setLatestSession] = useState<SessionNotification | null>(null);
   const [runningStatus, setRunningStatus] = useState<RunningStatus>({});
-  const [runningAllIndustries, setRunningAllIndustries] = useState(false);
-  const [distributingIndustries, setDistributingIndustries] = useState<Record<string, boolean>>({});
+  const [runningAllSites, setRunningAllSites] = useState(false);
+  const [distributingSites, setDistributingSites] = useState<Record<string, boolean>>({});
 
   const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
 
-  // Editor state: undefined = closed, null = create mode, string = edit industryId
+  // Editor state: undefined = closed, null = create mode, string = edit siteId
   const [editorTarget, setEditorTarget] = useState<string | null | undefined>(undefined);
   const [appConfigOpen, setAppConfigOpen] = useState(false);
 
-  // ── Load industry list ──
-  const loadIndustries = useCallback(async () => {
+  // ── Load site list ──
+  const loadSites = useCallback(async () => {
     try {
-      const res = await fetch('/api/industries');
+      const res = await fetch('/api/sites');
       if (!res.ok) return;
       const data = await res.json();
-      const list: IndustryListItem[] = data.industries ?? [];
-      setIndustries(list);
-      if (list.length > 0 && !list.find((i) => i.id === activeIndustry)) {
-        setActiveIndustry(list[0].id);
+      const list: SiteListItem[] = data.sites ?? [];
+      setSites(list);
+      if (list.length > 0 && !list.find((s) => s.id === activeSite)) {
+        setActiveSite(list[0].id);
       }
     } catch {
       // ignore
     }
-  }, [activeIndustry]);
+  }, [activeSite]);
 
-  useEffect(() => { loadIndustries(); }, [loadIndustries]);
+  useEffect(() => { loadSites(); }, [loadSites]);
 
   // ── Load app config status (for Algolia app + LLM resolution) ──
   useEffect(() => {
@@ -133,39 +133,39 @@ export default function Home() {
       .catch(() => {});
   }, []);
 
-  // ── Load personas for active industry ──
+  // ── Load personas for active site ──
   useEffect(() => {
-    if (!activeIndustry || activeIndustry in personasByIndustry) return;
-    fetch(`/api/industries/${activeIndustry}/personas`)
+    if (!activeSite || activeSite in personasBySite) return;
+    fetch(`/api/sites/${activeSite}/personas`)
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         // Always set the key (even to []) so PersonaSelector renders with its generate button
-        setPersonasByIndustry((prev) => ({
+        setPersonasBySite((prev) => ({
           ...prev,
-          [activeIndustry]: data?.personas ?? [],
+          [activeSite]: data?.personas ?? [],
         }));
       })
       .catch(() => {
-        setPersonasByIndustry((prev) => ({ ...prev, [activeIndustry]: [] }));
+        setPersonasBySite((prev) => ({ ...prev, [activeSite]: [] }));
       });
-  }, [activeIndustry, personasByIndustry]);
+  }, [activeSite, personasBySite]);
 
-  // ── Global SSE stream — header running-dots for all industries ───────
+  // ── Global SSE stream — header running-dots for all sites ───────
   // Receives { all: Record<id, {isRunning, isDistributing}> } on connect,
-  // then { industryId, isRunning, isDistributing } on each status change.
-  useSSE('/api/stream?industryId=_global&types=status', ['status'], (_, rawData) => {
+  // then { siteId, isRunning, isDistributing } on each status change.
+  useSSE('/api/stream?siteId=_global&types=status', ['status'], (_, rawData) => {
     const data = rawData as {
       all?: Record<string, { isRunning: boolean; isDistributing: boolean }>;
-      industryId?: string;
+      siteId?: string;
       isRunning?: boolean;
       isDistributing?: boolean;
     };
     if (data.all) {
       setRunningStatus(data.all);
-    } else if (data.industryId) {
+    } else if (data.siteId) {
       setRunningStatus((prev) => ({
         ...prev,
-        [data.industryId!]: {
+        [data.siteId!]: {
           isRunning: data.isRunning ?? false,
           isDistributing: data.isDistributing ?? false,
         },
@@ -176,30 +176,45 @@ export default function Home() {
   // ── Callbacks ──
   const handleSessionComplete = useCallback(
     (result: { personaId: string; totalEvents?: number; error?: string }) => {
-      const personas = personasByIndustry[activeIndustry] ?? [];
+      const personas = personasBySite[activeSite] ?? [];
       const persona = personas.find((p) => p.id === result.personaId);
       setLatestSession({
         ...result,
         totalEvents: result.totalEvents ?? 0,
         personaName: persona?.name,
-        industryId: activeIndustry,
+        siteId: activeSite,
         timestamp: Date.now(),
       });
     },
-    [activeIndustry, personasByIndustry]
+    [activeSite, personasBySite]
   );
 
-  const handleRunAllIndustries = async () => {
-    setRunningAllIndustries(true);
+  const [stoppingAllSites, setStoppingAllSites] = useState(false);
+
+  const handleRunAllSites = async () => {
+    setRunningAllSites(true);
     try {
       await fetch('/api/run-all', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
-      // SSE global stream will push status updates for each industry as they start
+      // SSE global stream will push status updates for each site as they start
     } finally {
-      setRunningAllIndustries(false);
+      setRunningAllSites(false);
+    }
+  };
+
+  const handleStopAllSites = async () => {
+    setStoppingAllSites(true);
+    try {
+      await fetch('/api/scheduler/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stopAll: true }),
+      });
+    } finally {
+      setStoppingAllSites(false);
     }
   };
 
@@ -209,43 +224,43 @@ export default function Home() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ startAll: true }),
     });
-    // SSE will push the scheduler started status for each industry
+    // SSE will push the scheduler started status for each site
   };
 
-  const handleDeleteIndustry = async (id: string) => {
-    if (!confirm(`Delete industry "${id}"? This cannot be undone.`)) return;
-    await fetch(`/api/industries/${id}`, { method: 'DELETE' });
-    await loadIndustries();
-    if (activeIndustry === id && industries.length > 1) {
-      const next = industries.find((i) => i.id !== id);
-      if (next) setActiveIndustry(next.id);
+  const handleDeleteSite = async (id: string) => {
+    if (!confirm(`Delete site "${id}"? This cannot be undone.`)) return;
+    await fetch(`/api/sites/${id}`, { method: 'DELETE' });
+    await loadSites();
+    if (activeSite === id && sites.length > 1) {
+      const next = sites.find((s) => s.id !== id);
+      if (next) setActiveSite(next.id);
     }
   };
 
   // ── Derived ──
-  const activeIndustryMeta = industries.find((i) => i.id === activeIndustry);
-  const activePersonas = personasByIndustry[activeIndustry] ?? [];
+  const activeSiteMeta = sites.find((s) => s.id === activeSite);
+  const activePersonas = personasBySite[activeSite] ?? [];
   const anyRunning = Object.values(runningStatus).some((s) => s.isRunning || s.isDistributing);
   const runningCount = Object.values(runningStatus).filter((s) => s.isRunning || s.isDistributing).length;
 
-  const resolvedAlgoliaApp = activeIndustryMeta && appStatus
+  const resolvedAlgoliaApp = activeSiteMeta && appStatus
     ? appStatus.algoliaApps.find(
-        (a) => a.id === (activeIndustryMeta.algoliaAppConfigId ?? appStatus.defaultAlgoliaAppId)
+        (a) => a.id === (activeSiteMeta.algoliaAppConfigId ?? appStatus.defaultAlgoliaAppId)
       ) ?? null
     : null;
 
-  const resolvedLLM = activeIndustryMeta && appStatus
+  const resolvedLLM = activeSiteMeta && appStatus
     ? appStatus.llmProviders.find(
-        (p) => p.id === (activeIndustryMeta.llmProviderId ?? appStatus.defaultLlmProviderId)
+        (p) => p.id === (activeSiteMeta.llmProviderId ?? appStatus.defaultLlmProviderId)
       ) ?? null
     : null;
 
-  const industrySummaries: IndustrySummary[] = industries.map((i) => ({
-    id: i.id,
-    name: i.name,
-    icon: i.icon,
-    color: i.color,
-    personaCount: i.personaCount,
+  const siteSummaries: SiteSummary[] = sites.map((s) => ({
+    id: s.id,
+    name: s.name,
+    icon: s.icon,
+    color: s.color,
+    personaCount: s.personaCount,
   }));
 
   const eventLimit = parseInt(process.env.NEXT_PUBLIC_DAILY_EVENT_LIMIT ?? '1000', 10);
@@ -266,28 +281,28 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-lg font-bold text-white leading-none">Algolia Insights Generator</h1>
-              <p className="text-xs text-slate-400 mt-0.5">Multi-industry event simulation</p>
+              <p className="text-xs text-slate-400 mt-0.5">Multi-site event simulation</p>
             </div>
           </div>
 
-          {/* Global industry status dots */}
+          {/* Global site status dots */}
           <div className="hidden md:flex items-center gap-3">
-            {industries.map((ind) => {
-              const status = runningStatus[ind.id];
+            {sites.map((site) => {
+              const status = runningStatus[site.id];
               const active = status?.isRunning || status?.isDistributing;
               return (
                 <button
-                  key={ind.id}
-                  onClick={() => setActiveIndustry(ind.id)}
-                  title={`${ind.name}${active ? ' — active' : ''}`}
+                  key={site.id}
+                  onClick={() => setActiveSite(site.id)}
+                  title={`${site.name}${active ? ' — active' : ''}`}
                   className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors"
                 >
                   <span className={`w-2 h-2 rounded-full transition-colors ${
                     active
-                      ? `${DOT[ind.color] ?? 'bg-blue-500'} shadow-[0_0_6px_2px] shadow-current animate-pulse`
+                      ? `${DOT[site.color] ?? 'bg-blue-500'} shadow-[0_0_6px_2px] shadow-current animate-pulse`
                       : 'bg-slate-600'
                   }`} />
-                  <span className={active ? (ACCENT[ind.color] ?? 'text-blue-400') : ''}>{ind.icon}</span>
+                  <span className={active ? (ACCENT[site.color] ?? 'text-blue-400') : ''}>{site.icon}</span>
                 </button>
               );
             })}
@@ -295,7 +310,7 @@ export default function Home() {
 
           {/* Global action buttons */}
           <div className="flex items-center gap-2 shrink-0">
-            {anyRunning && mainView === 'industries' && (
+            {anyRunning && mainView === 'sites' && (
               <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 {runningCount} running
@@ -305,14 +320,14 @@ export default function Home() {
             {/* View toggle */}
             <div className="flex items-center bg-slate-800 border border-slate-700 rounded-lg p-0.5">
               <button
-                onClick={() => setMainView('industries')}
+                onClick={() => setMainView('sites')}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-                  mainView === 'industries'
+                  mainView === 'sites'
                     ? 'bg-slate-600 text-white'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                Industries
+                Sites
               </button>
               <button
                 onClick={() => setMainView('agents')}
@@ -342,7 +357,7 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
-            {mainView === 'industries' && (
+            {mainView === 'sites' && (
               <>
                 <button
                   onClick={() => setEditorTarget(null)}
@@ -351,7 +366,7 @@ export default function Home() {
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
                   </svg>
-                  New Industry
+                  New Site
                 </button>
                 <button
                   onClick={handleStartAllSchedulers}
@@ -359,12 +374,33 @@ export default function Home() {
                 >
                   Schedule All
                 </button>
+                {anyRunning && (
+                  <button
+                    onClick={handleStopAllSites}
+                    disabled={stoppingAllSites}
+                    className="text-xs bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap flex items-center gap-1.5"
+                  >
+                    {stoppingAllSites ? (
+                      <>
+                        <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Stopping…
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        Stop All
+                      </>
+                    )}
+                  </button>
+                )}
                 <button
-                  onClick={handleRunAllIndustries}
-                  disabled={runningAllIndustries}
+                  onClick={handleRunAllSites}
+                  disabled={runningAllSites}
                   className="text-xs bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg font-medium transition-colors whitespace-nowrap"
                 >
-                  {runningAllIndustries ? 'Triggering…' : '⚡ Run All'}
+                  {runningAllSites ? 'Triggering…' : '⚡ Run All'}
                 </button>
               </>
             )}
@@ -376,48 +412,52 @@ export default function Home() {
         {/* ── Agent dashboard view ── */}
         {mainView === 'agents' && (
           <AgentDashboard
-            industries={industries}
+            sites={sites}
             eventLimit={eventLimit}
             appStatus={appStatus}
             onOpenSettings={() => setAppConfigOpen(true)}
+            onEditSite={(siteId) => setEditorTarget(siteId)}
           />
         )}
 
-        {/* ── Industry tab switcher (only in industries view) ── */}
-        {mainView === 'industries' && (
+        {/* ── Site tab switcher (only in sites view) ── */}
+        {mainView === 'sites' && (
         <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-3">
-          {industrySummaries.length > 0 ? (
-            <IndustrySwitcher
-              industries={industrySummaries}
-              activeIndustry={activeIndustry}
+          {siteSummaries.length > 0 ? (
+            <SiteSwitcher
+              sites={siteSummaries}
+              activeSite={activeSite}
               runningStatus={runningStatus}
-              onSwitch={setActiveIndustry}
+              onSwitch={setActiveSite}
             />
           ) : (
-            <div className="text-slate-500 text-sm px-2">Loading industries…</div>
+            <div className="text-slate-500 text-sm px-2">Loading sites…</div>
           )}
         </div>
         )}
 
-        {mainView === 'industries' && activeIndustryMeta && (
+        {mainView === 'sites' && activeSiteMeta && (
           <>
-            {/* ── Industry name banner ── */}
+            {/* ── Site name banner ── */}
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <span className="text-2xl">{activeIndustryMeta.icon}</span>
+                <span className="text-2xl">{activeSiteMeta.icon}</span>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className={`text-xl font-bold ${ACCENT[activeIndustryMeta.color] ?? 'text-white'}`}>
-                      {activeIndustryMeta.name}
+                    <h2 className={`text-xl font-bold ${ACCENT[activeSiteMeta.color] ?? 'text-white'}`}>
+                      {activeSiteMeta.name}
                     </h2>
-                    {activeIndustryMeta.isBuiltIn && (
+                    {activeSiteMeta.isBuiltIn && (
                       <span className="text-[10px] text-slate-600 bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded-full">built-in</span>
                     )}
                   </div>
                   <p className="text-xs text-slate-500">
                     {activePersonas.length} personas ·{' '}
-                    {activeIndustryMeta.indices.length} {activeIndustryMeta.indices.length === 1 ? 'index' : 'indices'} ·{' '}
-                    {activeIndustryMeta.indices.reduce((s, i) => s + i.events.length, 0)} events/session
+                    {activeSiteMeta.indices.length} {activeSiteMeta.indices.length === 1 ? 'index' : 'indices'} ·{' '}
+                    {activeSiteMeta.indices.reduce((s, i) => s + i.events.length, 0)} events/session
+                    {activeSiteMeta.siteUrl && (
+                      <> · <a href={activeSiteMeta.siteUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">{activeSiteMeta.siteUrl}</a></>
+                    )}
                   </p>
                   {(resolvedAlgoliaApp || resolvedLLM) && (
                     <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
@@ -429,7 +469,7 @@ export default function Home() {
                           <span className="text-blue-300 font-medium">{resolvedAlgoliaApp.name}</span>
                           <span className="text-slate-600">·</span>
                           <span className="font-mono text-slate-500">{resolvedAlgoliaApp.appId}</span>
-                          {activeIndustryMeta.algoliaAppConfigId && (
+                          {activeSiteMeta.algoliaAppConfigId && (
                             <span className="ml-0.5 text-blue-400/70 italic">override</span>
                           )}
                         </span>
@@ -442,7 +482,7 @@ export default function Home() {
                           <span className="text-violet-300 font-medium">{resolvedLLM.name}</span>
                           <span className="text-slate-600">·</span>
                           <span className="font-mono text-slate-500">{resolvedLLM.defaultModel}</span>
-                          {activeIndustryMeta.llmProviderId && (
+                          {activeSiteMeta.llmProviderId && (
                             <span className="ml-0.5 text-violet-400/70 italic">override</span>
                           )}
                         </span>
@@ -454,18 +494,18 @@ export default function Home() {
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => setEditorTarget(activeIndustry)}
+                  onClick={() => setEditorTarget(activeSite)}
                   className="flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-500 rounded-lg transition-colors"
                 >
                   <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-400">
                     <path d="M17.414 2.586a2 2 0 00-2.828 0L7 10.172V13h2.828l7.586-7.586a2 2 0 000-2.828z" />
                     <path fillRule="evenodd" d="M2 6a2 2 0 012-2h4a1 1 0 010 2H4v10h10v-4a1 1 0 112 0v4a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clipRule="evenodd" />
                   </svg>
-                  Edit Industry
+                  Edit Site
                 </button>
-                {!activeIndustryMeta.isBuiltIn && (
+                {!activeSiteMeta.isBuiltIn && (
                   <button
-                    onClick={() => handleDeleteIndustry(activeIndustry)}
+                    onClick={() => handleDeleteSite(activeSite)}
                     className="flex items-center gap-1.5 px-3 py-2 text-sm text-rose-400 hover:text-rose-300 bg-slate-800 hover:bg-rose-900/20 border border-slate-700 hover:border-rose-800 rounded-lg transition-colors"
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -478,7 +518,7 @@ export default function Home() {
 
             {/* ── Index summary chips ── */}
             <div className="flex flex-wrap gap-2">
-              {activeIndustryMeta.indices.map((idx) => (
+              {activeSiteMeta.indices.map((idx) => (
                 <div key={idx.id} className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5">
                   <span className={`text-[10px] font-bold uppercase tracking-wider ${idx.role === 'primary' ? 'text-blue-400' : 'text-slate-400'}`}>
                     {idx.role}
@@ -495,61 +535,61 @@ export default function Home() {
             {/* ── Counters + Scheduler ── */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <DailyCounter
-                industryId={activeIndustry}
-                indices={activeIndustryMeta.indices}
+                siteId={activeSite}
+                indices={activeSiteMeta.indices}
                 eventLimit={eventLimit}
               />
               <SchedulerControls
-                industryId={activeIndustry}
-                industryName={activeIndustryMeta.name}
+                siteId={activeSite}
+                siteName={activeSiteMeta.name}
                 onStatusChange={(s) =>
-                  setDistributingIndustries((prev) => ({
+                  setDistributingSites((prev) => ({
                     ...prev,
-                    [activeIndustry]: s.isDistributing,
+                    [activeSite]: s.isDistributing,
                   }))
                 }
               />
             </div>
 
             {/* ── Latest session result ── */}
-            {latestSession?.industryId === activeIndustry && (
+            {latestSession?.siteId === activeSite && (
               <SessionCard session={latestSession} />
             )}
 
             {/* ── Session history ── */}
             <SessionHistory
-              industryId={activeIndustry}
-              isActive={distributingIndustries[activeIndustry] ?? false}
+              siteId={activeSite}
+              isActive={distributingSites[activeSite] ?? false}
             />
 
             {/* ── Persona grid ── */}
-            {activeIndustry in personasByIndustry ? (
+            {activeSite in personasBySite ? (
               <PersonaSelector
                 personas={activePersonas}
-                industryId={activeIndustry}
-                industryName={activeIndustryMeta.name}
+                siteId={activeSite}
+                siteName={activeSiteMeta.name}
                 onSessionComplete={handleSessionComplete}
                 onPersonasGenerated={(newPersonas) => {
-                  setPersonasByIndustry((prev) => ({
+                  setPersonasBySite((prev) => ({
                     ...prev,
-                    [activeIndustry]: [
-                      ...(prev[activeIndustry] ?? []),
+                    [activeSite]: [
+                      ...(prev[activeSite] ?? []),
                       ...newPersonas,
                     ],
                   }));
                 }}
                 onPersonaUpdated={(updated) => {
-                  setPersonasByIndustry((prev) => ({
+                  setPersonasBySite((prev) => ({
                     ...prev,
-                    [activeIndustry]: (prev[activeIndustry] ?? []).map((p) =>
+                    [activeSite]: (prev[activeSite] ?? []).map((p) =>
                       p.id === updated.id ? updated : p
                     ),
                   }));
                 }}
                 onPersonaDeleted={(personaId) => {
-                  setPersonasByIndustry((prev) => ({
+                  setPersonasBySite((prev) => ({
                     ...prev,
-                    [activeIndustry]: (prev[activeIndustry] ?? []).filter(
+                    [activeSite]: (prev[activeSite] ?? []).filter(
                       (p) => p.id !== personaId
                     ),
                   }));
@@ -558,28 +598,28 @@ export default function Home() {
             ) : (
               <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-8 text-center">
                 <p className="text-slate-400 text-sm">
-                  Loading personas for {activeIndustryMeta.name}…
+                  Loading personas for {activeSiteMeta.name}…
                 </p>
                 <p className="text-slate-600 text-xs mt-2">
-                  Make sure the personas file is configured in the industry settings.
+                  Make sure the personas file is configured in the site settings.
                 </p>
               </div>
             )}
 
             {/* ── Event log ── */}
-            <EventLog industryId={activeIndustry} />
+            <EventLog siteId={activeSite} />
           </>
         )}
 
-        {/* ── No industries loaded state ── */}
-        {mainView === 'industries' && industries.length === 0 && (
+        {/* ── No sites loaded state ── */}
+        {mainView === 'sites' && sites.length === 0 && (
           <div className="text-center py-20">
-            <p className="text-slate-400">Loading industry configurations…</p>
+            <p className="text-slate-400">Loading site configurations…</p>
           </div>
         )}
       </main>
 
-      {/* ── Industry Editor (create / edit) ── */}
+      {/* ── App Config Panel ── */}
       {appConfigOpen && (
         <AppConfigPanel
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -594,16 +634,24 @@ export default function Home() {
         />
       )}
 
+      {/* ── Site Editor (create / edit) ── */}
       {editorTarget !== undefined && (
-        <IndustryEditor
-          industryId={editorTarget ?? undefined}
+        <SiteEditor
+          siteId={editorTarget ?? undefined}
+          initialSite={editorTarget ? sites.find((s) => s.id === editorTarget) : undefined}
+          appConfig={appStatus ? {
+            llmProviders: appStatus.llmProviders,
+            defaultLlmProviderId: appStatus.defaultLlmProviderId,
+            algoliaApps: appStatus.algoliaApps,
+            defaultAlgoliaAppId: appStatus.defaultAlgoliaAppId,
+          } : undefined}
           onSaved={async () => {
             setEditorTarget(undefined);
-            await loadIndustries();
-            // Refresh personas for the active industry
-            setPersonasByIndustry((prev) => {
+            await loadSites();
+            // Refresh personas for the active site
+            setPersonasBySite((prev) => {
               const updated = { ...prev };
-              delete updated[activeIndustry];
+              delete updated[activeSite];
               return updated;
             });
           }}
@@ -616,8 +664,8 @@ export default function Home() {
         <div className="max-w-screen-2xl mx-auto px-6 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
           <span>Algolia Insights Event Generator</span>
           <span>
-            {industries.length} industries ·{' '}
-            {industries.reduce((s, i) => s + i.personaCount, 0)} total personas
+            {sites.length} sites ·{' '}
+            {sites.reduce((s, i) => s + i.personaCount, 0)} total personas
           </span>
         </div>
       </footer>

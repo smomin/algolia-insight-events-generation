@@ -5,12 +5,12 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const industryId = searchParams.get('industryId');
-  if (!industryId) {
-    return NextResponse.json({ error: 'industryId required' }, { status: 400 });
+  const siteId = searchParams.get('siteId');
+  if (!siteId) {
+    return NextResponse.json({ error: 'siteId required' }, { status: 400 });
   }
   try {
-    const violations = await getGuardrailViolations(industryId);
+    const violations = await getGuardrailViolations(siteId);
     return NextResponse.json({ violations });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

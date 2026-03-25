@@ -1,6 +1,6 @@
 import cron from 'node-cron';
-import type { Persona, SchedulerRun, IndustryV2, FlexIndex } from '@/types';
-import { emitToIndustry } from '@/lib/sse';
+import type { Persona, SchedulerRun, SiteConfig, FlexIndex } from '@/types';
+import { emitToSite } from '@/lib/sse';
 import { createLogger } from '@/lib/logger';
 import { shuffle, sleep, randomInt, generateId as _generateId } from '@/lib/utils';
 
@@ -30,23 +30,23 @@ import {
 } from '@/lib/insights';
 
 // ─────────────────────────────────────────────
-// Per-industry scheduler state (in-memory)
+// Per-site scheduler state (in-memory)
 // ─────────────────────────────────────────────
 
-interface IndustrySchedulerState {
+interface SiteSchedulerState {
   task: cron.ScheduledTask | null;
   currentRun: SchedulerRun | null;
   isDistributing: boolean;
   cancelRequested: boolean;
 }
 
-const states = new Map<string, IndustrySchedulerState>();
+const states = new Map<string, SiteSchedulerState>();
 
-function getState(industryId: string): IndustrySchedulerState {
-  if (!states.has(industryId)) {
-    states.set(industryId, { task: null, currentRun: null, isDistributing: false, cancelRequested: false });
+function getState(siteId: string): SiteSchedulerState {
+  if (!states.has(siteId)) {
+    states.set(siteId, { task: null, currentRun: null, isDistributing: false, cancelRequested: false });
   }
-  return states.get(industryId)!;
+  return states.get(siteId)!;
 }
 
 // ─────────────────────────────────────────────
@@ -54,12 +54,12 @@ function getState(industryId: string): IndustrySchedulerState {
 // ─────────────────────────────────────────────
 
 /**
- * Emit the current scheduler status for an industry to all connected SSE clients.
+ * Emit the current scheduler status for a site to all connected SSE clients.
  * Pass `lastRun` only when a run has just completed so clients can display it.
  */
-function emitStatus(industryId: string, overrides: Record<string, unknown> = {}): void {
-  const state = getState(industryId);
-  emitToIndustry(industryId, 'status', {
+function emitStatus(siteId: string, overrides: Record<string, unknown> = {}): void {
+  const state = getState(siteId);
+  emitToSite(siteId, 'status', {
     isRunning: state.task !== null,
     isDistributing: state.isDistributing,
     cancelRequested: state.cancelRequested,
@@ -83,7 +83,7 @@ function generateSessionId(): string { return _generateId('sess'); }
 
 export async function runPersonaSession(
   persona: Persona,
-  industry: IndustryV2
+  site: SiteConfig
 ): Promise<{
   eventsByIndex: Record<string, number>;
   totalEvents: number;
@@ -93,16 +93,16 @@ export async function runPersonaSession(
   const sessionId = generateSessionId();
   const startedAt = new Date().toISOString();
 
-  const primaryIndex = industry.indices.find((i) => i.role === 'primary');
-  const secondaryIndices = industry.indices.filter((i) => i.role === 'secondary');
+  const primaryIndex = site.indices.find((i) => i.role === 'primary');
+  const secondaryIndices = site.indices.filter((i) => i.role === 'secondary');
 
   if (!primaryIndex) {
-    const err = 'No primary index configured for this industry';
-    await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
+    const err = 'No primary index configured for this site';
+    await _recordSession(site.id, sessionId, persona, startedAt, {}, false, err);
     return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
   }
 
-  const sessionLog = log.child(`${industry.id}:${persona.name}`);
+  const sessionLog = log.child(`${site.id}:${persona.name}`);
   sessionLog.info('session start', { sessionId });
 
   try {
@@ -110,8 +110,8 @@ export async function runPersonaSession(
     sessionLog.debug('step 1/5 — generating primary query via LLM');
     const primaryQuery = await generatePrimaryQuery(
       persona,
-      industry.claudePrompts.generatePrimaryQuery,
-      industry.id
+      site.claudePrompts.generatePrimaryQuery,
+      site.id
     );
     sessionLog.info('primary query generated', { query: primaryQuery });
 
@@ -122,13 +122,13 @@ export async function runPersonaSession(
       primaryQuery,
       persona.userToken,
       10,
-      industry.id
+      site.id
     );
 
     if (!primaryHits.length || !primaryQueryID) {
       const err = `No primary results for "${primaryQuery}" in index "${primaryIndex.indexName}"`;
       sessionLog.warn(err);
-      await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
+      await _recordSession(site.id, sessionId, persona, startedAt, {}, false, err);
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
     sessionLog.debug('step 2/5 done', { hitCount: primaryHits.length, queryID: primaryQueryID });
@@ -138,8 +138,8 @@ export async function runPersonaSession(
     const { index: selectedIdx, reason } = await selectBestResult(
       persona,
       primaryHits,
-      industry.claudePrompts.selectBestResult,
-      industry.id
+      site.claudePrompts.selectBestResult,
+      site.id
     );
     const selectedHit = primaryHits[selectedIdx];
     const position = selectedIdx + 1;
@@ -149,7 +149,7 @@ export async function runPersonaSession(
     if (!selectedHit) {
       const err = `LLM returned an out-of-range hit index (${selectedIdx}) for ${primaryHits.length} results`;
       sessionLog.warn(err);
-      await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
+      await _recordSession(site.id, sessionId, persona, startedAt, {}, false, err);
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
 
@@ -176,15 +176,15 @@ export async function runPersonaSession(
       const secQueries = await generateSecondaryQueries(
         selectedHit,
         persona,
-        industry.claudePrompts.generateSecondaryQueries,
-        industry.id,
+        site.claudePrompts.generateSecondaryQueries,
+        site.id,
         secondaryIndices.map((si) => ({ id: si.id, label: si.label }))
       );
 
       for (const secIdx of secondaryIndices) {
         const secResults = await Promise.all(
           secQueries.map((q) =>
-            searchIndex(secIdx.indexName, q, persona.userToken, 20, industry.id).catch(() => null)
+            searchIndex(secIdx.indexName, q, persona.userToken, 20, site.id).catch(() => null)
           )
         );
 
@@ -205,7 +205,7 @@ export async function runPersonaSession(
             fallbackQuery,
             persona.userToken,
             20,
-            industry.id
+            site.id
           ).catch(() => null);
           if (fallback?.hits.length && fallback.queryID) {
             cartProducts = [buildCartProduct(fallback.hits[0], fallback.queryID, 1)];
@@ -239,36 +239,36 @@ export async function runPersonaSession(
     if (allEvents.length === 0) {
       const err = 'No events built — check that indices have events configured';
       sessionLog.warn(err);
-      await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
+      await _recordSession(site.id, sessionId, persona, startedAt, {}, false, err);
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
 
     // ── 7. Send all events in one batch ──
     sessionLog.debug('sending events to Insights API', { totalEvents: allEvents.length });
-    const status = await sendEvents(allEvents, industry.id);
+    const status = await sendEvents(allEvents, site.id);
 
     if (status === 200) {
       const eventsByIndex: Record<string, number> = {
         [primaryIndex.id]: primaryEvts.length,
       };
 
-      await incrementIndexCounter(industry.id, primaryIndex.id, primaryEvts.length);
+      await incrementIndexCounter(site.id, primaryIndex.id, primaryEvts.length);
 
       for (const [indexId, { events: evts }] of Object.entries(secondaryEvtsByIndex)) {
         eventsByIndex[indexId] = evts.length;
-        await incrementIndexCounter(industry.id, indexId, evts.length);
+        await incrementIndexCounter(site.id, indexId, evts.length);
       }
 
       const sentMeta = {
-        industryId: industry.id,
+        siteId: site.id,
         personaId: persona.id,
         personaName: persona.name,
         sessionId,
       };
-      await appendEventLog(industry.id, toSentEvents(allEvents, status, sentMeta));
+      await appendEventLog(site.id, toSentEvents(allEvents, status, sentMeta));
 
       await _recordSession(
-        industry.id,
+        site.id,
         sessionId,
         persona,
         startedAt,
@@ -289,19 +289,19 @@ export async function runPersonaSession(
     } else {
       const err = `Insights API returned HTTP ${status}`;
       sessionLog.error(err, { sessionId, status });
-      await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
+      await _recordSession(site.id, sessionId, persona, startedAt, {}, false, err);
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     sessionLog.error('uncaught session error', err instanceof Error ? err : { message: msg });
-    try { await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, msg); } catch { /* swallow so caller always gets a result */ }
+    try { await _recordSession(site.id, sessionId, persona, startedAt, {}, false, msg); } catch { /* swallow so caller always gets a result */ }
     return { eventsByIndex: {}, totalEvents: 0, sessionId, error: msg };
   }
 }
 
 async function _recordSession(
-  industryId: string,
+  siteId: string,
   sessionId: string,
   persona: Persona,
   startedAt: string,
@@ -309,9 +309,9 @@ async function _recordSession(
   success: boolean,
   error?: string
 ): Promise<void> {
-  await appendSession(industryId, {
+  await appendSession(siteId, {
     id: sessionId,
-    industryId,
+    siteId,
     personaId: persona.id,
     personaName: persona.name,
     startedAt,
@@ -329,20 +329,20 @@ async function _recordSession(
 
 export async function distributeSessionsForDay(
   personas: Persona[],
-  industry: IndustryV2
+  site: SiteConfig
 ): Promise<SchedulerRun> {
-  const state = getState(industry.id);
+  const state = getState(site.id);
 
-  const distLog = log.child(industry.id);
+  const distLog = log.child(site.id);
 
   // Guard against concurrent runs — check both in-memory and persisted state
-  const persistedState = await getDistributionState(industry.id);
+  const persistedState = await getDistributionState(site.id);
   if (state.isDistributing || persistedState.isDistributing) {
     distLog.warn('distribution already in progress — skipping duplicate request');
     return (
       state.currentRun ?? {
         id: generateRunId(),
-        industryId: industry.id,
+        siteId: site.id,
         startedAt: new Date().toISOString(),
         sessionsPlanned: 0,
         sessionsCompleted: 0,
@@ -354,22 +354,27 @@ export async function distributeSessionsForDay(
   }
 
   state.isDistributing = true;
-  state.cancelRequested = false; // clear any stale cancel from a previous stop
-  await resetCountersIfNewDay(industry.id);
-  emitStatus(industry.id, { lastRun: null });
+  // Only clear in-memory cancel if the DB has no pending cancel (to preserve a
+  // Stop All that was requested while this function was being scheduled).
+  const preStartState = await getDistributionState(site.id);
+  if (!preStartState.cancelRequested) {
+    state.cancelRequested = false;
+  }
+  await resetCountersIfNewDay(site.id);
+  emitStatus(site.id, { lastRun: null });
 
   // Calculate max sessions constrained by the index with least budget
   let maxSessions = Infinity;
-  for (const idx of industry.indices) {
+  for (const idx of site.indices) {
     if (idx.events.length === 0) continue;
-    const remaining = await getRemainingBudget(industry.id, idx.id);
+    const remaining = await getRemainingBudget(site.id, idx.id);
     maxSessions = Math.min(maxSessions, Math.floor(remaining / idx.events.length));
   }
   const finalMax = isFinite(maxSessions) && maxSessions > 0 ? maxSessions : 0;
 
   const run: SchedulerRun = {
     id: generateRunId(),
-    industryId: industry.id,
+    siteId: site.id,
     startedAt: new Date().toISOString(),
     sessionsPlanned: finalMax,
     sessionsCompleted: 0,
@@ -379,7 +384,21 @@ export async function distributeSessionsForDay(
   };
   state.currentRun = run;
   // Persist active state to Couchbase so status survives hot reloads
-  await setDistributionActive(industry.id, run.id, true);
+  await setDistributionActive(site.id, run.id, true);
+
+  // Early-exit: Stop All may have been called during setup.
+  // setDistributionActive now preserves a pending DB cancel, so re-check here.
+  if (state.cancelRequested || (await getDistributionState(site.id)).cancelRequested) {
+    distLog.info('distribution cancelled before loop start');
+    run.completedAt = new Date().toISOString();
+    run.errors.push('Cancelled before start');
+    state.currentRun = null;
+    state.isDistributing = false;
+    state.cancelRequested = false;
+    await setDistributionActive(site.id, run.id, false);
+    emitStatus(site.id, { lastRun: run });
+    return run;
+  }
 
   distLog.info('distribution start', {
     runId: run.id,
@@ -390,11 +409,11 @@ export async function distributeSessionsForDay(
   if (finalMax === 0) {
     distLog.warn('budget fully exhausted — no sessions to run');
     run.completedAt = new Date().toISOString();
-    await appendSchedulerRun(industry.id, run);
+    await appendSchedulerRun(site.id, run);
     state.currentRun = null;
     state.isDistributing = false;
-    await setDistributionActive(industry.id, run.id, false);
-    emitStatus(industry.id, { lastRun: run });
+    await setDistributionActive(site.id, run.id, false);
+    emitStatus(site.id, { lastRun: run });
     return run;
   }
 
@@ -413,20 +432,20 @@ export async function distributeSessionsForDay(
         distLog.info('distribution cancelled (in-memory)', { sessionsCompleted: run.sessionsCompleted });
         break;
       }
-      if (sessionIndex % 5 === 0) {
-        const dist = await getDistributionState(industry.id);
-        if (dist.cancelRequested) {
-          distLog.info('distribution cancelled (persisted)', { sessionsCompleted: run.sessionsCompleted });
-          state.cancelRequested = true;
-          break;
-        }
+      // Check DB on every session — handles hot-reload module isolation in dev
+      // where the stop route may write to a different in-memory states Map.
+      const dist = await getDistributionState(site.id);
+      if (dist.cancelRequested) {
+        distLog.info('distribution cancelled (persisted)', { sessionsCompleted: run.sessionsCompleted });
+        state.cancelRequested = true;
+        break;
       }
 
       // Check budget for all indices before each session
       let canRun = true;
-      for (const idx of industry.indices) {
+      for (const idx of site.indices) {
         if (idx.events.length === 0) continue;
-        const remaining = await getRemainingBudget(industry.id, idx.id);
+        const remaining = await getRemainingBudget(site.id, idx.id);
         if (remaining < idx.events.length) { canRun = false; break; }
       }
       if (!canRun) {
@@ -434,7 +453,7 @@ export async function distributeSessionsForDay(
         break;
       }
 
-      const result = await runPersonaSession(persona, industry);
+      const result = await runPersonaSession(persona, site);
 
       if (result.error) {
         distLog.warn('session error', { persona: persona.name, error: result.error, sessionId: result.sessionId });
@@ -452,19 +471,19 @@ export async function distributeSessionsForDay(
       }
 
       // Push progress update so SchedulerControls shows live session count
-      emitStatus(industry.id);
+      emitStatus(site.id);
 
       await sleep(randomInt(500, 2000));
     }
 
     run.completedAt = new Date().toISOString();
-    try { await appendSchedulerRun(industry.id, run); } catch (e) { distLog.error('failed to persist run', e); }
+    try { await appendSchedulerRun(site.id, run); } catch (e) { distLog.error('failed to persist run', e); }
   } finally {
     state.currentRun = null;
     state.isDistributing = false;
     state.cancelRequested = false;
-    try { await setDistributionActive(industry.id, run.id, false); } catch (e) { distLog.error('failed to clear distribution state', e); }
-    emitStatus(industry.id, { lastRun: run });
+    try { await setDistributionActive(site.id, run.id, false); } catch (e) { distLog.error('failed to clear distribution state', e); }
+    emitStatus(site.id, { lastRun: run });
   }
 
   distLog.info('distribution complete', {
@@ -483,13 +502,13 @@ export async function distributeSessionsForDay(
 }
 
 // ─────────────────────────────────────────────
-// Scheduler lifecycle — per industry
+// Scheduler lifecycle — per site
 // ─────────────────────────────────────────────
 
-export function startScheduler(personas: Persona[], industry: IndustryV2): void {
-  const state = getState(industry.id);
+export function startScheduler(personas: Persona[], site: SiteConfig): void {
+  const state = getState(site.id);
   if (state.task) {
-    log.child(industry.id).warn('startScheduler called but scheduler is already running');
+    log.child(site.id).warn('startScheduler called but scheduler is already running');
     return;
   }
 
@@ -498,43 +517,43 @@ export function startScheduler(personas: Persona[], industry: IndustryV2): void 
 
   state.task = cron.schedule(
     cronExpr,
-    () => { distributeSessionsForDay(personas, industry).catch((err) => log.child(industry.id).error('distribution failed', err)); },
+    () => { distributeSessionsForDay(personas, site).catch((err) => log.child(site.id).error('distribution failed', err)); },
     { timezone: tz }
   );
 
-  log.child(industry.id).info('started', { cronExpr, timezone: tz, personaCount: personas.length });
-  emitStatus(industry.id);
+  log.child(site.id).info('started', { cronExpr, timezone: tz, personaCount: personas.length });
+  emitStatus(site.id);
 }
 
-export function stopScheduler(industryId: string): void {
-  const state = getState(industryId);
+export function stopScheduler(siteId: string): void {
+  const state = getState(siteId);
   if (state.task) {
     state.task.stop();
     state.task = null;
-    log.child(industryId).info('stopped');
-    emitStatus(industryId);
+    log.child(siteId).info('stopped');
+    emitStatus(siteId);
   }
 }
 
-/** Cancel any in-progress distribution run for the given industry. */
-export async function cancelDistribution(industryId: string): Promise<void> {
-  const state = getState(industryId);
+/** Cancel any in-progress distribution run for the given site. */
+export async function cancelDistribution(siteId: string): Promise<void> {
+  const state = getState(siteId);
   state.cancelRequested = true;
-  await setDistributionCancelRequested(industryId);
-  log.child(industryId).info('cancel requested (in-memory + persisted)');
-  emitStatus(industryId);
+  await setDistributionCancelRequested(siteId);
+  log.child(siteId).info('cancel requested (in-memory + persisted)');
+  emitStatus(siteId);
 }
 
-export function isSchedulerRunning(industryId: string): boolean {
-  return getState(industryId).task !== null;
+export function isSchedulerRunning(siteId: string): boolean {
+  return getState(siteId).task !== null;
 }
 
-export function isDistributing(industryId: string): boolean {
-  return getState(industryId).isDistributing;
+export function isDistributing(siteId: string): boolean {
+  return getState(siteId).isDistributing;
 }
 
-export function getCurrentRun(industryId: string): SchedulerRun | null {
-  return getState(industryId).currentRun;
+export function getCurrentRun(siteId: string): SchedulerRun | null {
+  return getState(siteId).currentRun;
 }
 
 export function getNextRunTime(): string | null {
@@ -553,7 +572,7 @@ export function getNextRunTime(): string | null {
   }
 }
 
-export function getNextRunTimeForIndustry(industryId: string): string | null {
-  if (!isSchedulerRunning(industryId)) return null;
+export function getNextRunTimeForSite(siteId: string): string | null {
+  if (!isSchedulerRunning(siteId)) return null;
   return getNextRunTime();
 }

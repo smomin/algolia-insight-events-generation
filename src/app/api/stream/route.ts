@@ -12,10 +12,10 @@ import {
   isSchedulerRunning,
   isDistributing,
   getCurrentRun,
-  getNextRunTimeForIndustry,
+  getNextRunTimeForSite,
 } from '@/lib/scheduler';
-import { getAllIndustries, getEventLimit } from '@/lib/industries';
-import { getAgentStateForIndustry } from '@/lib/agents/IndustryAgent';
+import { getAllSites, getEventLimit } from '@/lib/sites';
+import { getAgentStateForSite } from '@/lib/agents/SiteAgent';
 import { getSupervisorStatus } from '@/lib/agents/SupervisorAgent';
 import { getGuardrailViolations } from '@/lib/agentDb';
 
@@ -27,26 +27,19 @@ const VALID_TYPES = new Set<string>([
 ]);
 
 // ── Dev-mode hot-reload detection ─────────────────────────────────────────
-// Each time this module is evaluated (i.e. after a Next.js hot reload), the
-// version counter on globalThis increments. When it exceeds 1 the server has
-// been hot-reloaded and we broadcast a `reload` event so all SSE clients can
-// close and reopen their EventSource — forcing a fresh initial state snapshot.
 if (process.env.NODE_ENV === 'development') {
   const dg = globalThis as typeof globalThis & { _streamModuleVersion?: number };
   dg._streamModuleVersion = (dg._streamModuleVersion ?? 0) + 1;
   if (dg._streamModuleVersion > 1) {
-    // Small delay so the new module code is fully wired before clients reconnect
     setTimeout(() => emitDevReload(), 150);
   }
 }
 
-// Heartbeat interval — more frequent in dev so dropped connections are
-// detected quickly and the client reconnects with a fresh state snapshot.
 const HEARTBEAT_MS = process.env.NODE_ENV === 'development' ? 3_000 : 25_000;
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const industryId = searchParams.get('industryId') ?? '';
+  const siteId = searchParams.get('siteId') ?? '';
   const typesParam = searchParams.get('types') ?? 'status';
   const types = typesParam
     .split(',')
@@ -70,56 +63,48 @@ export async function GET(req: NextRequest) {
 
       // ── Initial snapshot ──────────────────────────────────────────────
       try {
-        if (industryId === '_global') {
-          // Send the running state for ALL industries so page.tsx can populate
-          // the header status dots immediately on connect.
-          const industries = await getAllIndustries();
+        if (siteId === '_global') {
+          const sites = await getAllSites();
           const all: Record<string, { isRunning: boolean; isDistributing: boolean }> = {};
           await Promise.all(
-            industries.map(async (ind) => {
-              const distState = await getDistributionState(ind.id);
-              const inMemDist = isDistributing(ind.id);
-              // Auto-heal stale persisted state (same logic as per-industry snapshot)
+            sites.map(async (site) => {
+              const distState = await getDistributionState(site.id);
+              const inMemDist = isDistributing(site.id);
               let actualDist = inMemDist || distState.isDistributing;
               if (!inMemDist && (distState.isDistributing || distState.cancelRequested)) {
-                await setDistributionActive(ind.id, distState.runId ?? 'stale', false);
+                await setDistributionActive(site.id, distState.runId ?? 'stale', false);
                 actualDist = false;
               }
-              all[ind.id] = {
-                isRunning: isSchedulerRunning(ind.id),
+              all[site.id] = {
+                isRunning: isSchedulerRunning(site.id),
                 isDistributing: actualDist,
               };
             })
           );
           send('status', { all });
-        } else if (industryId) {
-          // Send one snapshot per requested event type
+        } else if (siteId) {
           for (const type of types) {
             if (type === 'status') {
               const [lastRun, distState] = await Promise.all([
-                getLastSchedulerRun(industryId),
-                getDistributionState(industryId),
+                getLastSchedulerRun(siteId),
+                getDistributionState(siteId),
               ]);
-              const inMemDistributing = isDistributing(industryId);
+              const inMemDistributing = isDistributing(siteId);
 
-              // Auto-heal stale persisted state: if in-memory says the distribution
-              // is NOT running but Couchbase still claims it is (or has a dangling
-              // cancelRequested flag), the run ended uncleanly (hot-reload / crash).
-              // Clear the stale record so clients never get stuck in "Stopping…".
               let actuallyDistributing = inMemDistributing || distState.isDistributing;
               let cancelRequested = distState.cancelRequested;
               if (!inMemDistributing && (distState.isDistributing || distState.cancelRequested)) {
-                await setDistributionActive(industryId, distState.runId ?? 'stale', false);
+                await setDistributionActive(siteId, distState.runId ?? 'stale', false);
                 actuallyDistributing = false;
                 cancelRequested = false;
               }
 
-              const current = getCurrentRun(industryId);
+              const current = getCurrentRun(siteId);
               send('status', {
-                isRunning: isSchedulerRunning(industryId),
+                isRunning: isSchedulerRunning(siteId),
                 isDistributing: actuallyDistributing,
                 cancelRequested,
-                nextRun: getNextRunTimeForIndustry(industryId),
+                nextRun: getNextRunTimeForSite(siteId),
                 lastRun,
                 currentRun: current
                   ? { sessionsCompleted: current.sessionsCompleted, errors: current.errors }
@@ -127,14 +112,13 @@ export async function GET(req: NextRequest) {
                 eventLimit: getEventLimit(),
               });
             } else if (type === 'event-log') {
-              const events = await getEventLog(industryId);
-              // Mark as initial so the client replaces (not prepends) its local list
+              const events = await getEventLog(siteId);
               send('event-log', { events, initial: true });
             } else if (type === 'session') {
-              const sessions = await getSessions(industryId);
+              const sessions = await getSessions(siteId);
               send('session', { sessions, initial: true });
             } else if (type === 'counters') {
-              const counters = await getTodayCounters(industryId);
+              const counters = await getTodayCounters(siteId);
               send('counters', counters);
             }
           }
@@ -144,32 +128,32 @@ export async function GET(req: NextRequest) {
       }
 
       // ── Agent initial snapshots ──────────────────────────────────────
-      if (industryId && industryId !== '_global' && industryId !== '_supervisor') {
+      if (siteId && siteId !== '_global' && siteId !== '_supervisor') {
         if (types.includes('agent-status')) {
-          const agentState = getAgentStateForIndustry(industryId);
+          const agentState = getAgentStateForSite(siteId);
           send('agent-status', agentState);
         }
         if (types.includes('guardrail')) {
-          const violations = await getGuardrailViolations(industryId).catch(() => []);
+          const violations = await getGuardrailViolations(siteId).catch(() => []);
           send('guardrail', { violations, initial: true });
         }
       }
-      if (industryId === '_supervisor') {
+      if (siteId === '_supervisor') {
         const supStatus = getSupervisorStatus();
         send('supervisor', { ...supStatus, type: 'snapshot' });
       }
 
       // ── Subscribe to live updates ────────────────────────────────────
       const channel =
-        industryId === '_global'
+        siteId === '_global'
           ? '_global'
-          : industryId === '_supervisor'
+          : siteId === '_supervisor'
           ? '_supervisor'
-          : industryId;
+          : siteId;
       const listenTypes: SSEEventType[] =
-        industryId === '_global'
+        siteId === '_global'
           ? ['status']
-          : industryId === '_supervisor'
+          : siteId === '_supervisor'
           ? ['supervisor']
           : types;
 
@@ -177,16 +161,14 @@ export async function GET(req: NextRequest) {
         send(type, data);
       });
 
-      // ── Dev live-reload — tell clients to reconnect after hot reloads ─
+      // ── Dev live-reload ─────────────────────────────────────────────
       if (process.env.NODE_ENV === 'development') {
         unsubscribeReload = subscribeToDevReload(({ timestamp }) => {
           send('reload', { timestamp });
         });
       }
 
-      // ── Heartbeat — keeps the connection alive through proxies ────────
-      // In dev mode the interval is much shorter so dropped connections are
-      // detected quickly and clients reconnect with a fresh state snapshot.
+      // ── Heartbeat ────────────────────────────────────────────────────
       heartbeatId = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(': heartbeat\n\n'));

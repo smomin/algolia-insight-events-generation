@@ -7,8 +7,8 @@ import PersonaEditorModal from './PersonaEditorModal';
 
 interface PersonaSelectorProps {
   personas: Persona[];
-  industryId: string;
-  industryName?: string;
+  siteId: string;
+  siteName?: string;
   onSessionComplete?: (result: {
     personaId: string;
     totalEvents?: number;
@@ -56,7 +56,7 @@ function getDetails(p: Persona): string {
   }
   // Generic: show first extra attribute pair if available
   const excludeKeys = new Set([
-    'id', 'name', 'userToken', 'description', 'industry',
+    'id', 'name', 'userToken', 'description', 'site',
     'skill', 'budget', 'tags', 'cookingSkill', 'dietaryPreferences',
     'favoriteCuisines', 'avoids', 'householdSize', 'timeConstraint', 'shoppingFrequency',
   ]);
@@ -155,8 +155,8 @@ function PersonaCard({
 
 export default function PersonaSelector({
   personas,
-  industryId,
-  industryName = 'Industry',
+  siteId,
+  siteName = 'Site',
   onSessionComplete,
   onPersonasGenerated,
   onPersonaUpdated,
@@ -192,7 +192,7 @@ export default function PersonaSelector({
       const res = await fetch('/api/run-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ personaId, industryId }),
+        body: JSON.stringify({ personaId, siteId }),
       });
       // Safely parse — server may return HTML on a crash
       const text = await res.text();
@@ -231,7 +231,7 @@ export default function PersonaSelector({
             </span>
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            {personas.length} personas available for this industry
+            {personas.length} personas available for this site
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -293,8 +293,8 @@ export default function PersonaSelector({
 
     {generateModalOpen && (
       <GeneratePersonasModal
-        industryId={industryId}
-        industryName={industryName}
+        siteId={siteId}
+        siteName={siteName}
         onComplete={(newPersonas) => {
           onPersonasGenerated?.(newPersonas);
           setGenerateModalOpen(false);
@@ -306,7 +306,7 @@ export default function PersonaSelector({
     {editingPersona && (
       <PersonaEditorModal
         persona={editingPersona}
-        industryId={industryId}
+        siteId={siteId}
         onSaved={(updated) => {
           onPersonaUpdated?.(updated);
           setEditingPersona(null);

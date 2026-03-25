@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { AgentState, AgentSystemStatus, SupervisorDecision, GuardrailResult, IndustryV2, AgentConfigs } from '@/types';
+import type { AgentState, AgentSystemStatus, SupervisorDecision, GuardrailResult, SiteConfig, AgentConfigs } from '@/types';
 import { useSSE } from '../hooks/useSSE';
 import AgentStatusCard from './AgentStatusCard';
 import SupervisorLog from './SupervisorLog';
@@ -36,10 +36,11 @@ interface AppStatus {
 }
 
 interface Props {
-  industries: Array<IndustryV2 & { personaCount: number }>;
+  sites: Array<SiteConfig & { personaCount: number }>;
   eventLimit: number;
   appStatus: AppStatus | null;
   onOpenSettings: () => void;
+  onEditSite: (siteId: string) => void;
 }
 
 interface SupervisorStatusPayload {
@@ -49,7 +50,7 @@ interface SupervisorStatusPayload {
   type?: string;
 }
 
-export default function AgentDashboard({ industries, eventLimit, appStatus, onOpenSettings }: Props) {
+export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSettings, onEditSite }: Props) {
   const [isActive, setIsActive] = useState(false);
   const [startedAt, setStartedAt] = useState<string | undefined>();
   const [supervisorStatus, setSupervisorStatus] = useState<{
@@ -59,7 +60,7 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
   }>({ isRunning: false });
   const [agentStates, setAgentStates] = useState<Record<string, AgentState>>({});
   const [supervisorDecisions, setSupervisorDecisions] = useState<SupervisorDecision[]>([]);
-  const [guardrailsByIndustry, setGuardrailsByIndustry] = useState<Record<string, GuardrailResult[]>>({});
+  const [guardrailsBySite, setGuardrailsBySite] = useState<Record<string, GuardrailResult[]>>({});
   const [activeTab, setActiveTab] = useState<string>('overview');
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
@@ -140,69 +141,69 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
     }
   };
 
-  // Load guardrail violations for each industry
+  // Load guardrail violations for each site
   useEffect(() => {
-    industries.forEach(async (ind) => {
+    sites.forEach(async (site) => {
       try {
-        const res = await fetch(`/api/agents/guardrails?industryId=${ind.id}`);
+        const res = await fetch(`/api/agents/guardrails?siteId=${site.id}`);
         if (!res.ok) return;
         const data = await res.json();
-        setGuardrailsByIndustry((prev) => ({ ...prev, [ind.id]: data.violations ?? [] }));
+        setGuardrailsBySite((prev) => ({ ...prev, [site.id]: data.violations ?? [] }));
       } catch { /* ignore */ }
     });
-  }, [industries]);
+  }, [sites]);
 
-  // ── SSE: per-industry agent-status + guardrail events ─────────────
-  // Fixed-slot hooks (up to 6 industries) — hooks must be called unconditionally;
+  // ── SSE: per-site agent-status + guardrail events ─────────────
+  // Fixed-slot hooks (up to 6 sites) — hooks must be called unconditionally;
   // null URLs prevent the connection from being opened.
-  const industryIds = industries.map((i) => i.id);
+  const siteIds = sites.map((s) => s.id);
 
   useSSE(
-    industryIds.length > 0
-      ? `/api/stream?industryId=${industryIds[0]}&types=agent-status,guardrail`
+    siteIds.length > 0
+      ? `/api/stream?siteId=${siteIds[0]}&types=agent-status,guardrail`
       : null,
     ['agent-status', 'guardrail'],
-    (type, data) => handleIndustryEvent(industryIds[0], type, data)
+    (type, data) => handleSiteEvent(siteIds[0], type, data)
   );
   useSSE(
-    industryIds.length > 1
-      ? `/api/stream?industryId=${industryIds[1]}&types=agent-status,guardrail`
+    siteIds.length > 1
+      ? `/api/stream?siteId=${siteIds[1]}&types=agent-status,guardrail`
       : null,
     ['agent-status', 'guardrail'],
-    (type, data) => handleIndustryEvent(industryIds[1], type, data)
+    (type, data) => handleSiteEvent(siteIds[1], type, data)
   );
   useSSE(
-    industryIds.length > 2
-      ? `/api/stream?industryId=${industryIds[2]}&types=agent-status,guardrail`
+    siteIds.length > 2
+      ? `/api/stream?siteId=${siteIds[2]}&types=agent-status,guardrail`
       : null,
     ['agent-status', 'guardrail'],
-    (type, data) => handleIndustryEvent(industryIds[2], type, data)
+    (type, data) => handleSiteEvent(siteIds[2], type, data)
   );
   useSSE(
-    industryIds.length > 3
-      ? `/api/stream?industryId=${industryIds[3]}&types=agent-status,guardrail`
+    siteIds.length > 3
+      ? `/api/stream?siteId=${siteIds[3]}&types=agent-status,guardrail`
       : null,
     ['agent-status', 'guardrail'],
-    (type, data) => handleIndustryEvent(industryIds[3], type, data)
+    (type, data) => handleSiteEvent(siteIds[3], type, data)
   );
   useSSE(
-    industryIds.length > 4
-      ? `/api/stream?industryId=${industryIds[4]}&types=agent-status,guardrail`
+    siteIds.length > 4
+      ? `/api/stream?siteId=${siteIds[4]}&types=agent-status,guardrail`
       : null,
     ['agent-status', 'guardrail'],
-    (type, data) => handleIndustryEvent(industryIds[4], type, data)
+    (type, data) => handleSiteEvent(siteIds[4], type, data)
   );
   useSSE(
-    industryIds.length > 5
-      ? `/api/stream?industryId=${industryIds[5]}&types=agent-status,guardrail`
+    siteIds.length > 5
+      ? `/api/stream?siteId=${siteIds[5]}&types=agent-status,guardrail`
       : null,
     ['agent-status', 'guardrail'],
-    (type, data) => handleIndustryEvent(industryIds[5], type, data)
+    (type, data) => handleSiteEvent(siteIds[5], type, data)
   );
 
   // ── SSE: supervisor stream ─────────────────────────────────────────
   useSSE(
-    '/api/stream?industryId=_supervisor&types=supervisor',
+    '/api/stream?siteId=_supervisor&types=supervisor',
     ['supervisor'],
     (_, data) => {
       const payload = data as SupervisorDecision & SupervisorStatusPayload;
@@ -235,19 +236,19 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
     }
   );
 
-  function handleIndustryEvent(industryId: string | undefined, type: string, data: unknown) {
-    if (!industryId) return;
+  function handleSiteEvent(siteId: string | undefined, type: string, data: unknown) {
+    if (!siteId) return;
     if (type === 'agent-status') {
       const state = data as AgentState;
-      setAgentStates((prev) => ({ ...prev, [industryId]: state }));
+      setAgentStates((prev) => ({ ...prev, [siteId]: state }));
     } else if (type === 'guardrail') {
       const payload = data as GuardrailResult & { violations?: GuardrailResult[]; initial?: boolean };
       if (payload.initial && payload.violations) {
-        setGuardrailsByIndustry((prev) => ({ ...prev, [industryId]: payload.violations! }));
+        setGuardrailsBySite((prev) => ({ ...prev, [siteId]: payload.violations! }));
       } else if (payload.originalQuery) {
-        setGuardrailsByIndustry((prev) => ({
+        setGuardrailsBySite((prev) => ({
           ...prev,
-          [industryId]: [payload as GuardrailResult, ...(prev[industryId] ?? [])].slice(0, 100),
+          [siteId]: [payload as GuardrailResult, ...(prev[siteId] ?? [])].slice(0, 100),
         }));
       }
     }
@@ -318,12 +319,12 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
     : null;
 
   // ── Derived stats ──────────────────────────────────────────────────
-  const allViolations = Object.values(guardrailsByIndustry).flat();
+  const allViolations = Object.values(guardrailsBySite).flat();
   const activeAgents = Object.values(agentStates).filter((s) => s.isActive).length;
   const totalEventsSentToday = Object.values(agentStates).reduce((s, a) => s + a.eventsSentToday, 0);
 
-  const tabIndustry = industries.find((i) => i.id === activeTab);
-  const tabViolations = activeTab !== 'overview' ? (guardrailsByIndustry[activeTab] ?? []) : [];
+  const tabSite = sites.find((s) => s.id === activeTab);
+  const tabViolations = activeTab !== 'overview' ? (guardrailsBySite[activeTab] ?? []) : [];
 
   return (
     <div className="space-y-5">
@@ -457,12 +458,12 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
               badge: 'bg-violet-900/40 text-violet-300 border-violet-800',
             },
             {
-              key: 'industryAgent' as const,
+              key: 'siteAgent' as const,
               accent: 'text-blue-400',
               border: 'border-blue-800/40',
               bg: 'bg-blue-900/10',
               num: '②',
-              label: 'Industry Agent',
+              label: 'Site Agent',
               badge: 'bg-blue-900/40 text-blue-300 border-blue-800',
             },
             {
@@ -581,7 +582,7 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
         </div>
       </div>
 
-      {/* ── Tab bar: overview + per-industry ──────────────────────── */}
+      {/* ── Tab bar: overview + per-site ──────────────────────── */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1">
         <button
           onClick={() => setActiveTab('overview')}
@@ -593,21 +594,21 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
         >
           Overview
         </button>
-        {industries.map((ind) => {
-          const violations = guardrailsByIndustry[ind.id]?.length ?? 0;
-          const state = agentStates[ind.id];
+        {sites.map((site) => {
+          const violations = guardrailsBySite[site.id]?.length ?? 0;
+          const state = agentStates[site.id];
           return (
             <button
-              key={ind.id}
-              onClick={() => setActiveTab(ind.id)}
+              key={site.id}
+              onClick={() => setActiveTab(site.id)}
               className={`shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                activeTab === ind.id
+                activeTab === site.id
                   ? 'bg-slate-700 text-white'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
               }`}
             >
-              <span>{ind.icon}</span>
-              <span>{ind.name}</span>
+              <span>{site.icon}</span>
+              <span>{site.name}</span>
               {state?.isActive && (
                 <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
               )}
@@ -624,8 +625,8 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
       {/* ── Overview: agent cards grid + supervisor log ────────────── */}
       {activeTab === 'overview' && (
         <>
-          {/* Warning when no industry has personas */}
-          {industries.every((i) => i.personaCount === 0) && (
+          {/* Warning when no site has personas */}
+          {sites.every((s) => s.personaCount === 0) && (
             <div className="flex items-start gap-3 bg-amber-900/20 border border-amber-800/50 rounded-xl px-4 py-3">
               <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -634,37 +635,38 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
               <div>
                 <p className="text-sm text-amber-300 font-medium">No personas configured</p>
                 <p className="text-xs text-amber-400/70 mt-0.5">
-                  The supervisor needs personas to run sessions. Switch to the <strong>Industries</strong> tab, select an industry, and use the <strong>Generate Personas</strong> button.
+                  The supervisor needs personas to run sessions. Switch to the <strong>Sites</strong> tab, select a site, and use the <strong>Generate Personas</strong> button.
                 </p>
               </div>
             </div>
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {industries.map((ind) => {
-              const agentState = agentStates[ind.id] ?? {
-                industryId: ind.id,
+            {sites.map((site) => {
+              const agentState = agentStates[site.id] ?? {
+                siteId: site.id,
                 phase: 'idle' as const,
                 sessionsCompleted: 0,
                 sessionsTarget: 0,
                 eventsSentToday: 0,
-                dailyTarget: eventLimit * Math.max(1, ind.indices.filter((i) => i.events.length > 0).length),
+                dailyTarget: eventLimit * Math.max(1, site.indices.filter((i) => i.events.length > 0).length),
                 guardrailViolations: 0,
                 lastActivity: new Date().toISOString(),
                 errors: [],
                 isActive: false,
               };
               const dailyTarget =
-                eventLimit * Math.max(1, ind.indices.filter((i) => i.events.length > 0).length);
+                eventLimit * Math.max(1, site.indices.filter((i) => i.events.length > 0).length);
               return (
                 <AgentStatusCard
-                  key={ind.id}
-                  industryName={ind.name}
-                  industryIcon={ind.icon}
-                  industryColor={ind.color}
+                  key={site.id}
+                  siteName={site.name}
+                  siteIcon={site.icon}
+                  siteColor={site.color}
                   state={agentState}
                   dailyTarget={dailyTarget}
-                  personaCount={ind.personaCount}
+                  personaCount={site.personaCount}
+                  onEdit={() => onEditSite(site.id)}
                 />
               );
             })}
@@ -678,13 +680,13 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
         </>
       )}
 
-      {/* ── Per-industry detail view ────────────────────────────────── */}
-      {activeTab !== 'overview' && tabIndustry && (
+      {/* ── Per-site detail view ────────────────────────────────── */}
+      {activeTab !== 'overview' && tabSite && (
         <div className="space-y-4">
           {/* Agent card */}
           {(() => {
-            const state = agentStates[tabIndustry.id] ?? {
-              industryId: tabIndustry.id,
+            const state = agentStates[tabSite.id] ?? {
+              siteId: tabSite.id,
               phase: 'idle' as const,
               sessionsCompleted: 0,
               sessionsTarget: 0,
@@ -697,30 +699,31 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
             };
             const dailyTarget =
               eventLimit *
-              Math.max(1, tabIndustry.indices.filter((i) => i.events.length > 0).length);
+              Math.max(1, tabSite.indices.filter((i) => i.events.length > 0).length);
             return (
               <AgentStatusCard
-                industryName={tabIndustry.name}
-                industryIcon={tabIndustry.icon}
-                industryColor={tabIndustry.color}
+                siteName={tabSite.name}
+                siteIcon={tabSite.icon}
+                siteColor={tabSite.color}
                 state={state}
                 dailyTarget={dailyTarget}
-                personaCount={tabIndustry.personaCount}
+                personaCount={tabSite.personaCount}
+                onEdit={() => onEditSite(tabSite.id)}
               />
             );
           })()}
 
-          {/* Supervisor decisions for this industry */}
+          {/* Supervisor decisions for this site */}
           <SupervisorLog
-            decisions={supervisorDecisions.filter((d) => d.industryId === tabIndustry.id)}
+            decisions={supervisorDecisions.filter((d) => d.siteId === tabSite.id)}
             isRunning={supervisorStatus.isRunning}
             lastRunAt={supervisorStatus.lastRunAt}
           />
 
-          {/* Guardrail violations for this industry */}
+          {/* Guardrail violations for this site */}
           <GuardrailLog
             violations={tabViolations}
-            industryName={tabIndustry.name}
+            siteName={tabSite.name}
           />
         </div>
       )}
@@ -741,7 +744,7 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
                   <span className="text-slate-300">
                     {editingAgent === 'supervisor' ? 'Supervisor Agent'
                       : editingAgent === 'guardrails' ? 'Guardrails Agent'
-                      : 'Industry Agent'}
+                      : 'Site Agent'}
                   </span>
                 </h3>
               </div>
@@ -762,8 +765,8 @@ export default function AgentDashboard({ industries, eventLimit, appStatus, onOp
                   'This prompt defines the Supervisor Agent\'s role and decision-making behavior. It is stored and displayed for reference — the supervisor\'s pacing logic is algorithmic.'}
                 {editingAgent === 'guardrails' &&
                   'This system prompt is sent to the LLM on every guardrail validation call. It determines how strictly queries are evaluated against persona profiles.'}
-                {editingAgent === 'industryAgent' &&
-                  'This prompt describes the Industry Agent\'s overarching behavior. It is stored as context; per-industry query prompts are configured in the Industries tab.'}
+                {editingAgent === 'siteAgent' &&
+                  'This prompt describes the Site Agent\'s overarching behavior. It is stored as context; per-site query prompts are configured in the Sites tab.'}
               </p>
             </div>
 
