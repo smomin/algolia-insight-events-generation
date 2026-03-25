@@ -4,11 +4,12 @@ import { useState, useCallback, useEffect } from 'react';
 import AppConfigPanel from './components/AppConfigPanel';
 import AgentDashboard from './components/AgentDashboard';
 import SiteEditor from './components/SiteEditor';
-import type { AgentConfig } from '@/types';
+import type { AgentConfig, Persona } from '@/types';
 
-// Agent as returned by /api/agent-configs (includes personaCount)
+// Agent as returned by /api/agent-configs (includes personaCount + full personas array)
 interface AgentListItem extends AgentConfig {
   personaCount: number;
+  personas: Persona[];
 }
 
 interface AlgoliaAppStatus {

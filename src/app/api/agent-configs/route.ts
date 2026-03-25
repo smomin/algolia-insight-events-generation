@@ -12,6 +12,7 @@ export async function GET() {
         return {
           ...agent,
           personaCount: personas.length,
+          personas,
           indices: agent.indices.map((idx) => ({
             id: idx.id,
             label: idx.label,

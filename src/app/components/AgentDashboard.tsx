@@ -39,7 +39,7 @@ interface AppStatus {
 }
 
 interface Props {
-  sites: Array<AgentConfig & { personaCount: number }>;
+  sites: Array<AgentConfig & { personaCount: number; personas?: Persona[] }>;
   eventLimit: number;
   appStatus: AppStatus | null;
   onOpenSettings: () => void;
@@ -226,12 +226,31 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // mount only — siteIdsRef always has the latest value
 
-  // Also trigger when the agent list changes (e.g. a new agent is created)
-  // and when the user switches to a tab that isn't loaded yet.
+  // When the agent list changes, pre-populate personas directly from the sites prop
+  // (the /api/agent-configs response already includes the full personas array, so no
+  // separate per-agent fetches are needed). Only fall back to individual fetches for
+  // any agent that arrived without a personas field.
   useEffect(() => {
+    const fromProp = sites.filter(
+      (s) => Array.isArray(s.personas) && !(s.id in personasBySiteRef.current)
+    );
+    if (fromProp.length > 0) {
+      // Write to the ref synchronously so the loadPersonas in-flight guard fires immediately
+      for (const s of fromProp) {
+        personasBySiteRef.current[s.id] = s.personas!;
+      }
+      setPersonasBySite((prev) => {
+        const next = { ...prev };
+        for (const s of fromProp) next[s.id] = s.personas!;
+        return next;
+      });
+      console.warn(`[Personas] pre-populated from prop: [${fromProp.map((s) => `${s.id}(${s.personas!.length})`).join(', ')}]`);
+    }
+
+    // Fall back to individual fetches for agents not covered by the prop
     const unloaded = sites.map((s) => s.id).filter((id) => !(id in personasBySiteRef.current));
     if (unloaded.length > 0) {
-      console.warn(`[Personas] sites changed — loading missing agents: [${unloaded.join(', ')}]`);
+      console.warn(`[Personas] fetching missing agents: [${unloaded.join(', ')}]`);
       unloaded.forEach((id, i) => setTimeout(() => loadPersonas(id), i * 200));
     }
   }, [sites, loadPersonas]);
