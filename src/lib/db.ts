@@ -296,3 +296,58 @@ export async function appendPersonaQuery(
 
   await cbUpsert('agentData', memoryKey(agentId, personaId), { entries: updated });
 }
+
+// ─────────────────────────────────────────────
+// Per-index persona query memory
+// Scoped to agentId + personaId + indexId so each IndexAgent maintains its
+// own search history independently of other indices on the same agent.
+// ─────────────────────────────────────────────
+
+function indexMemoryKey(agentId: string, personaId: string, indexId: string): string {
+  return `persona_mem_${agentId}_${personaId}_idx_${indexId}`;
+}
+
+/**
+ * Returns the last N approved queries for a persona on a specific index,
+ * newest-first. Prunes entries older than MEMORY_MAX_AGE_DAYS automatically.
+ */
+export async function getIndexQueryMemory(
+  agentId: string,
+  personaId: string,
+  indexId: string
+): Promise<string[]> {
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', indexMemoryKey(agentId, personaId, indexId));
+  if (!doc?.entries?.length) return [];
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - MEMORY_MAX_AGE_DAYS);
+
+  return doc.entries
+    .filter((e) => new Date(e.timestamp) >= cutoff)
+    .map((e) => e.query);
+}
+
+/**
+ * Appends a successfully-approved query to the per-index persona memory,
+ * deduplicating and capping at MAX_PERSONA_MEMORY entries.
+ */
+export async function appendIndexQuery(
+  agentId: string,
+  personaId: string,
+  indexId: string,
+  query: string
+): Promise<void> {
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', indexMemoryKey(agentId, personaId, indexId));
+  const existing = doc?.entries ?? [];
+
+  const deduped = existing.filter(
+    (e) => e.query.toLowerCase() !== query.toLowerCase()
+  );
+
+  const updated: PersonaMemoryEntry[] = [
+    { query, timestamp: new Date().toISOString() },
+    ...deduped,
+  ].slice(0, MAX_PERSONA_MEMORY);
+
+  await cbUpsert('agentData', indexMemoryKey(agentId, personaId, indexId), { entries: updated });
+}

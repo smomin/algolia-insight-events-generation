@@ -12,6 +12,12 @@ export interface IndexEvent {
   eventName: string;
 }
 
+/** Per-index system prompt overrides for the IndexAgent. */
+export interface IndexAgentPrompts {
+  /** System prompt override for this index's agent (takes priority over global defaults). */
+  systemPrompt?: string;
+}
+
 /** A configured Algolia index belonging to an agent */
 export interface FlexIndex {
   id: string;        // slug unique within agent, e.g. "recipes" or "hotels"
@@ -19,6 +25,8 @@ export interface FlexIndex {
   indexName: string; // actual Algolia index name
   role: 'primary' | 'secondary';
   events: IndexEvent[];
+  /** Optional per-index prompt overrides for the IndexAgent. */
+  agentPrompts?: IndexAgentPrompts;
 }
 
 // ─────────────────────────────────────────────
@@ -387,6 +395,10 @@ export interface AgentConfigs {
   supervisor: AgentPromptConfig;
   guardrails: AgentPromptConfig;
   workerAgent: AgentPromptConfig;
+  /** System prompt for primary index agents (drives initial discovery queries). */
+  primaryIndexAgent: AgentPromptConfig;
+  /** System prompt for secondary index agents (extends journey from primary result context). */
+  secondaryIndexAgent: AgentPromptConfig;
   /** @deprecated Use workerAgent */
   siteAgent?: AgentPromptConfig;
 }

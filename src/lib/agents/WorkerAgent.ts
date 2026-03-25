@@ -18,9 +18,7 @@ import type { Persona, AgentConfig, AgentState, AgentPhase, FlexIndex } from '@/
 import { emitToAgent } from '@/lib/sse';
 import { searchIndex } from '@/lib/algolia';
 import {
-  generatePrimaryQuery,
   selectBestResult,
-  generateSecondaryQueries,
 } from '@/lib/anthropic';
 import {
   buildFlexIndexEvents,
@@ -38,7 +36,9 @@ import {
   getPersonaQueryMemory,
   appendPersonaQuery,
 } from '@/lib/db';
-import { guardrailsAgent, GUARDRAIL_MAX_RETRIES } from './GuardrailsAgent';
+import { GUARDRAIL_MAX_RETRIES } from './GuardrailsAgent';
+import { IndexAgent } from './IndexAgent';
+import type { PrimaryIndexContext } from './IndexAgent';
 import { createLogger } from '@/lib/logger';
 import { shuffle, sleep, randomInt, generateId } from '@/lib/utils';
 import { getEventLimit } from '@/lib/agentConfigs';
@@ -165,13 +165,17 @@ export class WorkerAgent {
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
 
-    sessionLog.debug('index config', {
+    // ── Create IndexAgent instances — one per configured index ────────
+    const primaryIndexAgent = new IndexAgent(primaryIndex, agent);
+    const secondaryIndexAgents = secondaryIndices.map((idx) => new IndexAgent(idx, agent));
+
+    sessionLog.debug('index agents created', {
       primaryIndex: primaryIndex.indexName,
       secondaryIndices: secondaryIndices.map((s) => s.indexName),
     });
 
     try {
-      // ── Phase 1: Planning — generate search query ──────────────────
+      // ── Phase 1: Planning — primary IndexAgent generates query ──────
       setPhase(agent.id, 'planning', {
         currentPersonaId: persona.id,
         currentPersonaName: persona.name,
@@ -179,28 +183,36 @@ export class WorkerAgent {
       });
       sessionLog.debug('phase: planning');
 
-      const recentQueries = await getPersonaQueryMemory(agent.id, persona.id).catch(() => []);
-      sessionLog.debug('persona query memory loaded', { recentQueryCount: recentQueries.length });
+      // Agent-level memory feeds into the primary IndexAgent so queries
+      // are unique across all indices, not just the primary one.
+      const agentRecentQueries = await getPersonaQueryMemory(agent.id, persona.id).catch(() => []);
+      sessionLog.debug('persona query memory loaded', { recentQueryCount: agentRecentQueries.length });
 
-      let primaryQuery = await generatePrimaryQuery(
+      let primaryQuery = await primaryIndexAgent.generatePrimaryQuery(
         persona,
-        agent.claudePrompts.generatePrimaryQuery,
-        agent.id,
-        recentQueries
+        agentRecentQueries
       );
-      sessionLog.info('primary query generated', { query: primaryQuery });
+      sessionLog.info('primary index agent: query generated', {
+        index: primaryIndex.label,
+        query: primaryQuery,
+      });
 
-      // ── Phase 2: Validating — guardrails check ─────────────────────
+      // ── Phase 2: Validating — primary IndexAgent runs guardrails ────
       setPhase(agent.id, 'validating', { currentQuery: primaryQuery });
-      sessionLog.debug('phase: validating');
+      sessionLog.debug('phase: validating (primary index agent)');
 
       let attempts = 1;
-      let validation = await guardrailsAgent.validate(primaryQuery, persona, agent, attempts);
+      let validation = await primaryIndexAgent.validate(primaryQuery, persona, attempts);
 
       while (!validation.approved && attempts < GUARDRAIL_MAX_RETRIES) {
         attempts++;
         const retryQuery = validation.suggestedQuery ?? primaryQuery;
-        sessionLog.info(`guardrail retry ${attempts}`, { retryQuery, rejectedQuery: primaryQuery, reason: validation.reason });
+        sessionLog.info(`primary index agent: guardrail retry ${attempts}`, {
+          index: primaryIndex.label,
+          retryQuery,
+          rejectedQuery: primaryQuery,
+          reason: validation.reason,
+        });
 
         const state = getOrCreateState(agent.id);
         setPhase(agent.id, 'validating', {
@@ -209,7 +221,7 @@ export class WorkerAgent {
         });
 
         primaryQuery = retryQuery;
-        validation = await guardrailsAgent.validate(primaryQuery, persona, agent, attempts);
+        validation = await primaryIndexAgent.validate(primaryQuery, persona, attempts);
       }
 
       if (!validation.approved) {
@@ -219,19 +231,28 @@ export class WorkerAgent {
           guardrailViolations: state.guardrailViolations + 1,
           currentQuery: primaryQuery,
         });
-        sessionLog.warn('guardrail retries exhausted — proceeding anyway', {
+        sessionLog.warn('primary index agent: guardrail retries exhausted — proceeding anyway', {
+          index: primaryIndex.label,
           finalQuery: primaryQuery,
           totalAttempts: attempts,
         });
       }
 
+      // Persist to both agent-level memory (cross-index deduplication) and
+      // per-index memory (index-specific history)
       appendPersonaQuery(agent.id, persona.id, primaryQuery).catch((err) =>
-        sessionLog.warn('failed to save query to persona memory', { error: err instanceof Error ? err.message : String(err) })
+        sessionLog.warn('failed to save query to agent memory', {
+          error: err instanceof Error ? err.message : String(err),
+        })
       );
+      primaryIndexAgent.rememberQuery(persona.id, primaryQuery);
 
       // ── Phase 3: Searching — Algolia primary index ─────────────────
       setPhase(agent.id, 'searching', { currentQuery: primaryQuery });
-      sessionLog.debug('phase: searching', { query: primaryQuery, index: primaryIndex.indexName });
+      sessionLog.debug('phase: searching (primary)', {
+        query: primaryQuery,
+        index: primaryIndex.indexName,
+      });
 
       const { hits: primaryHits, queryID: primaryQueryID } = await searchIndex(
         primaryIndex.indexName,
@@ -251,8 +272,12 @@ export class WorkerAgent {
         return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
       }
 
-      sessionLog.debug('primary search results', { hitCount: primaryHits.length, queryID: primaryQueryID });
+      sessionLog.debug('primary search results', {
+        hitCount: primaryHits.length,
+        queryID: primaryQueryID,
+      });
 
+      // Site agent selects the best result — this remains a site-level decision
       const { index: selectedIdx, reason } = await selectBestResult(
         persona,
         primaryHits,
@@ -261,7 +286,12 @@ export class WorkerAgent {
       );
       const selectedHit = primaryHits[selectedIdx] ?? primaryHits[0];
       const position = (selectedIdx ?? 0) + 1;
-      sessionLog.debug('hit selected', { selectedIndex: selectedIdx, objectID: selectedHit.objectID, position, reason });
+      sessionLog.debug('hit selected by site agent', {
+        selectedIndex: selectedIdx,
+        objectID: selectedHit.objectID,
+        position,
+        reason,
+      });
 
       const primaryEvts = buildFlexIndexEvents(
         persona,
@@ -272,59 +302,101 @@ export class WorkerAgent {
         []
       );
 
-      // ── Secondary indices ──────────────────────────────────────────
+      // Build primary context — passed to every secondary IndexAgent so they
+      // can reason about what the user found and extend the session coherently
+      const primaryContext: PrimaryIndexContext = {
+        query: primaryQuery,
+        hit: selectedHit,
+        indexLabel: primaryIndex.label,
+        indexName: primaryIndex.indexName,
+        selectionReason: reason,
+      };
+
+      // ── Secondary indices — each IndexAgent generates its own queries ─
       const secondaryEvtsByIndex: Record<
         string,
         { index: FlexIndex; events: ReturnType<typeof buildFlexIndexEvents> }
       > = {};
 
-      if (secondaryIndices.length > 0) {
-        const secQueries = await generateSecondaryQueries(
-          selectedHit,
+      for (const secIndexAgent of secondaryIndexAgents) {
+        const secIdx = secondaryIndices.find((s) => s.id === secIndexAgent.indexId)!;
+
+        sessionLog.debug(`secondary index agent: generating queries`, {
+          index: secIndexAgent.indexLabel,
+          indexName: secIndexAgent.indexName,
+        });
+
+        let secQueries = await secIndexAgent.generateSecondaryQueries(
           persona,
-          agent.claudePrompts.generateSecondaryQueries,
-          agent.id,
-          secondaryIndices.map((si) => ({ id: si.id, label: si.label }))
+          primaryContext,
+          agentRecentQueries
         );
 
-        for (const secIdx of secondaryIndices) {
-          const secResults = await Promise.all(
-            secQueries.map((q) =>
-              searchIndex(secIdx.indexName, q, persona.userToken, 20, agent.id).catch(() => null)
-            )
-          );
+        sessionLog.info('secondary index agent: queries generated', {
+          index: secIndexAgent.indexLabel,
+          queries: secQueries,
+        });
 
-          let cartProducts = secResults
-            .map((result, i) => {
-              if (!result?.hits.length || !result.queryID) return null;
-              return buildCartProduct(result.hits[0], result.queryID, i + 1);
-            })
-            .filter((p): p is NonNullable<typeof p> => p !== null);
-
-          if (cartProducts.length === 0) {
-            const fallback = await searchIndex(
-              secIdx.indexName,
-              (selectedHit.name as string) ?? (selectedHit.title as string) ?? selectedHit.objectID,
-              persona.userToken,
-              20,
-              agent.id
-            ).catch(() => null);
-            if (fallback?.hits.length && fallback.queryID) {
-              cartProducts = [buildCartProduct(fallback.hits[0], fallback.queryID, 1)];
+        // Guardrail validation for the leading secondary query (single attempt)
+        if (secQueries.length > 0) {
+          const secValidation = await secIndexAgent.validate(secQueries[0], persona, 1);
+          if (!secValidation.approved) {
+            sessionLog.warn('secondary index agent: guardrail rejected leading query', {
+              index: secIndexAgent.indexLabel,
+              originalQuery: secQueries[0],
+              suggestedQuery: secValidation.suggestedQuery,
+              reason: secValidation.reason,
+            });
+            if (secValidation.suggestedQuery) {
+              secQueries = [secValidation.suggestedQuery, ...secQueries.slice(1)];
             }
           }
+        }
 
-          if (cartProducts.length > 0) {
-            const evts = buildFlexIndexEvents(
-              persona,
-              secIdx,
-              cartProducts[0],
-              1,
-              cartProducts[0].queryID,
-              cartProducts
-            );
-            secondaryEvtsByIndex[secIdx.id] = { index: secIdx, events: evts };
+        // Search the secondary index with all generated queries
+        const secResults = await Promise.all(
+          secQueries.map((q) =>
+            searchIndex(secIdx.indexName, q, persona.userToken, 20, agent.id).catch(() => null)
+          )
+        );
+
+        let cartProducts = secResults
+          .map((result, i) => {
+            if (!result?.hits.length || !result.queryID) return null;
+            return buildCartProduct(result.hits[0], result.queryID, i + 1);
+          })
+          .filter((p): p is NonNullable<typeof p> => p !== null);
+
+        if (cartProducts.length === 0) {
+          const fallback = await searchIndex(
+            secIdx.indexName,
+            (selectedHit.name as string) ?? (selectedHit.title as string) ?? selectedHit.objectID,
+            persona.userToken,
+            20,
+            agent.id
+          ).catch(() => null);
+          if (fallback?.hits.length && fallback.queryID) {
+            cartProducts = [buildCartProduct(fallback.hits[0], fallback.queryID, 1)];
           }
+        }
+
+        if (cartProducts.length > 0) {
+          const evts = buildFlexIndexEvents(
+            persona,
+            secIdx,
+            cartProducts[0],
+            1,
+            cartProducts[0].queryID,
+            cartProducts
+          );
+          secondaryEvtsByIndex[secIdx.id] = { index: secIdx, events: evts };
+
+          // Persist the top secondary query to per-index memory
+          secIndexAgent.rememberQuery(persona.id, secQueries[0]);
+        } else {
+          sessionLog.debug('secondary index agent: no results found', {
+            index: secIndexAgent.indexLabel,
+          });
         }
       }
 

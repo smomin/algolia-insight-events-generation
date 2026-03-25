@@ -77,10 +77,36 @@ Always stay in character as the persona. Generate queries that a real person wit
 /** @deprecated Use DEFAULT_WORKER_AGENT_PROMPT */
 export const DEFAULT_SITE_AGENT_PROMPT = DEFAULT_WORKER_AGENT_PROMPT;
 
+export const DEFAULT_PRIMARY_INDEX_AGENT_PROMPT = `You are a Primary Index Search Agent responsible for generating realistic, persona-driven discovery queries for the primary catalog.
+
+Your role is to simulate the initial search intent of a user arriving at the site — the first thing they type into the search bar during a browsing session.
+
+Guidelines:
+- Generate a single search query that authentically reflects the persona's intent, skill level, budget, and interests
+- Use natural language a real person would type — avoid overly technical or generic terms
+- Draw on the persona's specific attributes (dietary preferences, skills, budget, tags, domain-specific fields)
+- Align the query with the site and index context to ensure it returns meaningful results
+- Vary query styles across sessions: sometimes broad discovery ("healthy weeknight dinners"), sometimes specific ("sous vide salmon fillets"), sometimes need-based ("quick gluten-free pasta")
+- Output ONLY the search query string — no quotes, no punctuation at the end, no explanation`;
+
+export const DEFAULT_SECONDARY_INDEX_AGENT_PROMPT = `You are a Secondary Index Search Agent responsible for generating contextually relevant search queries that extend the user's journey after their primary discovery.
+
+You are informed by what the user already found in the primary index — your queries should build a coherent, realistic session that leads toward conversion events (add-to-cart, purchase).
+
+Guidelines:
+- Base queries on the primary result's key attributes: name, category, type, style, brand, ingredients, or themes
+- Consider what complementary, related, or necessary items this persona would search for next
+- Stay true to the persona's budget, preferences, and behavioral patterns
+- Generate queries that naturally lead toward add-to-cart or purchase actions in the secondary catalog
+- Ensure each query is meaningfully different — cover distinct aspects of the complementary need
+- Return a JSON array of 3 to 5 short search query strings — no markdown, no code fences, no extra text`;
+
 const DEFAULT_AGENT_CONFIGS: AgentConfigs = {
   supervisor: { systemPrompt: DEFAULT_SUPERVISOR_PROMPT },
   guardrails: { systemPrompt: DEFAULT_GUARDRAILS_PROMPT },
   workerAgent: { systemPrompt: DEFAULT_WORKER_AGENT_PROMPT },
+  primaryIndexAgent: { systemPrompt: DEFAULT_PRIMARY_INDEX_AGENT_PROMPT },
+  secondaryIndexAgent: { systemPrompt: DEFAULT_SECONDARY_INDEX_AGENT_PROMPT },
 };
 
 export async function getAgentConfigs(): Promise<AgentConfigs> {
@@ -91,6 +117,8 @@ export async function getAgentConfigs(): Promise<AgentConfigs> {
     guardrails: doc.guardrails ?? DEFAULT_AGENT_CONFIGS.guardrails,
     // Support legacy `siteAgent` key stored in DB
     workerAgent: doc.workerAgent ?? doc.siteAgent ?? DEFAULT_AGENT_CONFIGS.workerAgent,
+    primaryIndexAgent: doc.primaryIndexAgent ?? DEFAULT_AGENT_CONFIGS.primaryIndexAgent,
+    secondaryIndexAgent: doc.secondaryIndexAgent ?? DEFAULT_AGENT_CONFIGS.secondaryIndexAgent,
   };
 }
 
@@ -107,6 +135,12 @@ export async function upsertAgentConfigs(configs: Partial<AgentConfigs>): Promis
     workerAgent: configs.workerAgent
       ? { ...configs.workerAgent, updatedAt: now }
       : current.workerAgent,
+    primaryIndexAgent: configs.primaryIndexAgent
+      ? { ...configs.primaryIndexAgent, updatedAt: now }
+      : current.primaryIndexAgent,
+    secondaryIndexAgent: configs.secondaryIndexAgent
+      ? { ...configs.secondaryIndexAgent, updatedAt: now }
+      : current.secondaryIndexAgent,
   };
   await cbUpsert('agentData', 'agent_configs', updated);
   return updated;
