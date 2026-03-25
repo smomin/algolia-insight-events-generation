@@ -1,6 +1,9 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-algolia-blue: #003DFF;
+  --color-algolia-teal: #00B7C7;
+}
 
 :root {
   --background: #0f172a;

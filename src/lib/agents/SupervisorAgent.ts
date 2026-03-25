@@ -14,7 +14,7 @@
  *  - critical → dispatch up to 10 sessions (at or near end of day)
  */
 
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import type { SupervisorDecision, SupervisorUrgency } from '@/types';
 import { emitToSite } from '@/lib/sse';
 import { getAllSites, getPersonas, getEventLimit } from '@/lib/sites';
@@ -37,7 +37,7 @@ function supervisorId(): string {
 // ─────────────────────────────────────────────
 
 interface SupervisorState {
-  task: cron.ScheduledTask | null;
+  task: ScheduledTask | null;
   isRunning: boolean;
   startedAt?: string;
   lastRunAt?: string;

@@ -1,4 +1,4 @@
-import cron from 'node-cron';
+import cron, { type ScheduledTask } from 'node-cron';
 import type { Persona, SchedulerRun, SiteConfig, FlexIndex } from '@/types';
 import { emitToSite } from '@/lib/sse';
 import { createLogger } from '@/lib/logger';
@@ -34,7 +34,7 @@ import {
 // ─────────────────────────────────────────────
 
 interface SiteSchedulerState {
-  task: cron.ScheduledTask | null;
+  task: ScheduledTask | null;
   currentRun: SchedulerRun | null;
   isDistributing: boolean;
   cancelRequested: boolean;
