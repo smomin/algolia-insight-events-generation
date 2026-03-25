@@ -72,7 +72,37 @@ export async function GET(req: NextRequest) {
       // ── Initial snapshot ──────────────────────────────────────────────
       // Each DB call is individually guarded so a slow/unavailable collection
       // cannot block the rest of the snapshot or the SSE connection itself.
-      if (agentId === '_global') {
+
+      // Multi-agent combined stream: one connection covers all agents.
+      // Events are tagged with agentId so the client can route them.
+      if (agentId === '_agents') {
+        const aidList = (searchParams.get('agentIds') ?? '').split(',').filter(Boolean);
+        for (const aid of aidList) {
+          if (types.includes('agent-status')) {
+            send('agent-status', { ...getAgentState(aid), agentId: aid });
+          }
+          if (types.includes('guardrail')) {
+            const violations = await getGuardrailViolations(aid).catch(() => []);
+            send('guardrail', { agentId: aid, violations, initial: true });
+          }
+          if (types.includes('session')) {
+            try {
+              const sessions = await getSessions(aid);
+              send('session', { agentId: aid, sessions, initial: true });
+            } catch {
+              send('session', { agentId: aid, sessions: [], initial: true });
+            }
+          }
+          if (types.includes('event-log')) {
+            try {
+              const events = await getEventLog(aid);
+              send('event-log', { agentId: aid, events, initial: true });
+            } catch {
+              send('event-log', { agentId: aid, events: [], initial: true });
+            }
+          }
+        }
+      } else if (agentId === '_global') {
         try {
           const agents = await getAllAgents();
           const all: Record<string, { isRunning: boolean; isDistributing: boolean }> = {};
@@ -153,7 +183,7 @@ export async function GET(req: NextRequest) {
       }
 
       // ── Agent initial snapshots ──────────────────────────────────────
-      if (agentId && agentId !== '_global' && agentId !== '_supervisor') {
+      if (agentId && agentId !== '_global' && agentId !== '_supervisor' && agentId !== '_agents') {
         if (types.includes('agent-status')) {
           const agentState = getAgentState(agentId);
           send('agent-status', agentState);
@@ -169,22 +199,32 @@ export async function GET(req: NextRequest) {
       }
 
       // ── Subscribe to live updates ────────────────────────────────────
-      const channel =
-        agentId === '_global'
-          ? '_global'
-          : agentId === '_supervisor'
-          ? '_supervisor'
-          : agentId;
-      const listenTypes: SSEEventType[] =
-        agentId === '_global'
-          ? ['status']
-          : agentId === '_supervisor'
-          ? ['supervisor']
-          : types;
+      if (agentId === '_agents') {
+        const aidList = (searchParams.get('agentIds') ?? '').split(',').filter(Boolean);
+        const unsubs = aidList.map((aid) =>
+          subscribeToStream(aid, types, (type, data) => {
+            send(type, { agentId: aid, ...(data as object) });
+          })
+        );
+        unsubscribe = () => unsubs.forEach((u) => u());
+      } else {
+        const channel =
+          agentId === '_global'
+            ? '_global'
+            : agentId === '_supervisor'
+            ? '_supervisor'
+            : agentId;
+        const listenTypes: SSEEventType[] =
+          agentId === '_global'
+            ? ['status']
+            : agentId === '_supervisor'
+            ? ['supervisor']
+            : types;
 
-      unsubscribe = subscribeToStream(channel, listenTypes, (type, data) => {
-        send(type, data);
-      });
+        unsubscribe = subscribeToStream(channel, listenTypes, (type, data) => {
+          send(type, data);
+        });
+      }
 
       // ── Dev live-reload ─────────────────────────────────────────────
       if (process.env.NODE_ENV === 'development') {

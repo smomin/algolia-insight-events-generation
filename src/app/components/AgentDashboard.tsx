@@ -307,42 +307,24 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     });
   }, [sites]);
 
-  // ── SSE: per-site agent-status + guardrail + session + event-log ──────────
-  // All four types share one connection per agent so we stay within the
-  // browser HTTP/1.1 limit of 6 persistent connections per origin.
-  // (5 agents × 1 connection + 1 supervisor = 6 total)
+  // ── SSE: all agents in a single combined connection ────────────────────────
+  // Previously this was one connection per agent (up to 6 total including
+  // supervisor), which filled the browser HTTP/1.1 limit of 6 per origin and
+  // caused subsequent API calls (Start/Stop) to queue indefinitely.
+  // Now a single ?agentId=_agents stream covers all agents; each event payload
+  // includes an "agentId" field so the handler can route it correctly.
   const siteIds = sites.map((s) => s.id);
   const PER_AGENT_TYPES = ['agent-status', 'guardrail', 'session', 'event-log'] as const;
 
   useSSE(
-    siteIds.length > 0 ? `/api/stream?siteId=${siteIds[0]}&types=agent-status,guardrail,session,event-log` : null,
+    siteIds.length > 0
+      ? `/api/stream?agentId=_agents&agentIds=${siteIds.join(',')}&types=agent-status,guardrail,session,event-log`
+      : null,
     PER_AGENT_TYPES,
-    (type, data) => handleSiteEvent(siteIds[0], type, data)
-  );
-  useSSE(
-    siteIds.length > 1 ? `/api/stream?siteId=${siteIds[1]}&types=agent-status,guardrail,session,event-log` : null,
-    PER_AGENT_TYPES,
-    (type, data) => handleSiteEvent(siteIds[1], type, data)
-  );
-  useSSE(
-    siteIds.length > 2 ? `/api/stream?siteId=${siteIds[2]}&types=agent-status,guardrail,session,event-log` : null,
-    PER_AGENT_TYPES,
-    (type, data) => handleSiteEvent(siteIds[2], type, data)
-  );
-  useSSE(
-    siteIds.length > 3 ? `/api/stream?siteId=${siteIds[3]}&types=agent-status,guardrail,session,event-log` : null,
-    PER_AGENT_TYPES,
-    (type, data) => handleSiteEvent(siteIds[3], type, data)
-  );
-  useSSE(
-    siteIds.length > 4 ? `/api/stream?siteId=${siteIds[4]}&types=agent-status,guardrail,session,event-log` : null,
-    PER_AGENT_TYPES,
-    (type, data) => handleSiteEvent(siteIds[4], type, data)
-  );
-  useSSE(
-    siteIds.length > 5 ? `/api/stream?siteId=${siteIds[5]}&types=agent-status,guardrail,session,event-log` : null,
-    PER_AGENT_TYPES,
-    (type, data) => handleSiteEvent(siteIds[5], type, data)
+    (type, data) => {
+      const d = data as { agentId?: string };
+      if (d.agentId) handleSiteEvent(d.agentId, type, data);
+    }
   );
 
   // ── SSE: supervisor stream ─────────────────────────────────────────
@@ -421,8 +403,10 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
   const handleStart = async () => {
     setIsStarting(true);
     setStartError(null);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30_000);
     try {
-      const res = await fetch('/api/agents/start', { method: 'POST' });
+      const res = await fetch('/api/agents/start', { method: 'POST', signal: controller.signal });
       if (res.ok || res.status === 409) {
         setIsActive(true);
       } else {
@@ -430,8 +414,13 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
         setStartError((body as { error?: string }).error ?? `Server error ${res.status}`);
       }
     } catch (e) {
-      setStartError(e instanceof Error ? e.message : 'Network error');
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setStartError('Request timed out — the server may still be compiling. Refresh and try again.');
+      } else {
+        setStartError(e instanceof Error ? e.message : 'Network error');
+      }
     } finally {
+      clearTimeout(timeoutId);
       setIsStarting(false);
       await loadStatus();
     }
