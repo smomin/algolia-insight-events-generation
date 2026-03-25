@@ -12,6 +12,9 @@ import { callLLM } from '@/lib/llm';
 import { emitToIndustry } from '@/lib/sse';
 import { appendGuardrailViolation, getAgentConfigs, DEFAULT_GUARDRAILS_PROMPT } from '@/lib/agentDb';
 import type { Persona, IndustryV2, GuardrailResult } from '@/types';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('Guardrails');
 
 export const GUARDRAIL_MAX_RETRIES = parseInt(
   process.env.GUARDRAIL_MAX_RETRIES ?? '3',
@@ -25,6 +28,10 @@ export class GuardrailsAgent {
     industry: IndustryV2,
     attemptNumber = 1
   ): Promise<GuardrailResult> {
+    const ilog = log.child(industry.id);
+
+    ilog.debug('validating query', { persona: persona.name, query, attemptNumber });
+
     const personaLines = Object.entries(persona)
       .filter(([k]) => !['id', 'userToken'].includes(k))
       .map(([k, v]) => `  ${k}: ${Array.isArray(v) ? (v as unknown[]).join(', ') : v}`)
@@ -66,18 +73,29 @@ export class GuardrailsAgent {
         timestamp: new Date().toISOString(),
       };
 
-      if (!result.approved) {
-        console.log(
-          `[Guardrails:${industry.id}] REJECTED attempt ${attemptNumber} — "${query}" for ${persona.name}: ${result.reason}`
-        );
+      if (result.approved) {
+        ilog.debug('query approved', { persona: persona.name, query, attemptNumber, reason: result.reason });
+      } else {
+        ilog.warn(`query REJECTED (attempt ${attemptNumber})`, {
+          persona: persona.name,
+          query,
+          reason: result.reason,
+          suggestedQuery: result.suggestedQuery,
+        });
         emitToIndustry(industry.id, 'guardrail', result);
-        appendGuardrailViolation(industry.id, result).catch(console.error);
+        appendGuardrailViolation(industry.id, result).catch((err) =>
+          ilog.error('failed to persist guardrail violation', err)
+        );
       }
 
       return result;
     } catch (err) {
-      // Fail open — if the guardrail LLM call errors, approve and continue
-      console.warn(`[Guardrails:${industry.id}] Validation error, approving by default:`, err);
+      ilog.warn('validation LLM call failed — failing open (approved by default)', {
+        persona: persona.name,
+        query,
+        attemptNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
       return {
         approved: true,
         reason: 'Guardrail validation unavailable — approved by default',

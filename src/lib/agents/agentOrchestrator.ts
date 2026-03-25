@@ -18,6 +18,9 @@ import {
 } from './SupervisorAgent';
 import { getAllAgentStates } from './IndustryAgent';
 import { getSupervisorDecisions } from '@/lib/agentDb';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('Orchestrator');
 
 // ─────────────────────────────────────────────
 // Orchestrator state
@@ -39,21 +42,24 @@ const state = g._orchestratorState;
 // ─────────────────────────────────────────────
 
 export async function startAgentSystem(): Promise<void> {
-  if (state.isActive) return;
+  if (state.isActive) {
+    log.warn('startAgentSystem called but system is already active');
+    return;
+  }
 
-  console.log('[Orchestrator] Starting agent system...');
+  log.info('starting agent system');
   state.isActive = true;
   state.startedAt = new Date().toISOString();
 
-  // Supervisor loads personas fresh on every tick — no pre-loading needed
   startSupervisor();
-  console.log('[Orchestrator] Agent system started.');
+  log.info('agent system started', { startedAt: state.startedAt });
 }
 
 export function stopAgentSystem(): void {
+  log.info('stopping agent system');
   stopSupervisor();
   state.isActive = false;
-  console.log('[Orchestrator] Agent system stopped.');
+  log.info('agent system stopped');
 }
 
 export function isAgentSystemActive(): boolean {
@@ -62,6 +68,7 @@ export function isAgentSystemActive(): boolean {
 
 /** Force an immediate supervisor tick (useful from the UI "Run Now" button). */
 export function triggerSupervisorNow(): void {
+  log.info('manual supervisor tick triggered');
   runSupervisorTickNow();
 }
 

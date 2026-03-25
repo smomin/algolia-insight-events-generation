@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { subscribeToStream, type SSEEventType } from '@/lib/sse';
+import { subscribeToStream, subscribeToDevReload, emitDevReload, type SSEEventType } from '@/lib/sse';
 import {
   getTodayCounters,
   getEventLog,
@@ -26,6 +26,24 @@ const VALID_TYPES = new Set<string>([
   'agent-status', 'guardrail', 'supervisor',
 ]);
 
+// ── Dev-mode hot-reload detection ─────────────────────────────────────────
+// Each time this module is evaluated (i.e. after a Next.js hot reload), the
+// version counter on globalThis increments. When it exceeds 1 the server has
+// been hot-reloaded and we broadcast a `reload` event so all SSE clients can
+// close and reopen their EventSource — forcing a fresh initial state snapshot.
+if (process.env.NODE_ENV === 'development') {
+  const dg = globalThis as typeof globalThis & { _streamModuleVersion?: number };
+  dg._streamModuleVersion = (dg._streamModuleVersion ?? 0) + 1;
+  if (dg._streamModuleVersion > 1) {
+    // Small delay so the new module code is fully wired before clients reconnect
+    setTimeout(() => emitDevReload(), 150);
+  }
+}
+
+// Heartbeat interval — more frequent in dev so dropped connections are
+// detected quickly and the client reconnects with a fresh state snapshot.
+const HEARTBEAT_MS = process.env.NODE_ENV === 'development' ? 3_000 : 25_000;
+
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const industryId = searchParams.get('industryId') ?? '';
@@ -36,6 +54,7 @@ export async function GET(req: NextRequest) {
 
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | undefined;
+  let unsubscribeReload: (() => void) | undefined;
   let heartbeatId: ReturnType<typeof setInterval> | undefined;
 
   const stream = new ReadableStream({
@@ -158,19 +177,29 @@ export async function GET(req: NextRequest) {
         send(type, data);
       });
 
-      // ── Heartbeat — keeps the connection alive through proxies ───────
+      // ── Dev live-reload — tell clients to reconnect after hot reloads ─
+      if (process.env.NODE_ENV === 'development') {
+        unsubscribeReload = subscribeToDevReload(({ timestamp }) => {
+          send('reload', { timestamp });
+        });
+      }
+
+      // ── Heartbeat — keeps the connection alive through proxies ────────
+      // In dev mode the interval is much shorter so dropped connections are
+      // detected quickly and clients reconnect with a fresh state snapshot.
       heartbeatId = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(': heartbeat\n\n'));
         } catch {
           /* already closed */
         }
-      }, 25_000);
+      }, HEARTBEAT_MS);
     },
 
     cancel() {
       clearInterval(heartbeatId);
       unsubscribe?.();
+      unsubscribeReload?.();
     },
   });
 

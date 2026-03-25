@@ -39,6 +39,9 @@ import {
   appendPersonaQuery,
 } from '@/lib/db';
 import { guardrailsAgent, GUARDRAIL_MAX_RETRIES } from './GuardrailsAgent';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('IndustryAgent');
 
 // ─────────────────────────────────────────────
 // In-memory per-industry agent state
@@ -158,18 +161,26 @@ export class IndustryAgent {
   }> {
     const sessionId = generateSessionId();
     const startedAt = new Date().toISOString();
-    const tag = `[Agent:${industry.id}:${persona.name}]`;
+    const sessionLog = log.child(`${industry.id}:${persona.name}`);
+
+    sessionLog.info('session start', { sessionId, personaId: persona.id });
 
     const primaryIndex = industry.indices.find((i) => i.role === 'primary');
     const secondaryIndices = industry.indices.filter((i) => i.role === 'secondary');
 
     if (!primaryIndex) {
       const err = 'No primary index configured for this industry';
+      sessionLog.error(err);
       setPhase(industry.id, 'error', {
         errors: [...getOrCreateState(industry.id).errors.slice(-9), err],
       });
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
+
+    sessionLog.debug('index config', {
+      primaryIndex: primaryIndex.indexName,
+      secondaryIndices: secondaryIndices.map((s) => s.indexName),
+    });
 
     try {
       // ── Phase 1: Planning — generate search query ──────────────────
@@ -178,13 +189,10 @@ export class IndustryAgent {
         currentPersonaName: persona.name,
         currentQuery: undefined,
       });
-      console.log(`${tag} Phase: planning`);
+      sessionLog.debug('phase: planning');
 
-      // Load persona's query history so the LLM can avoid repetition
       const recentQueries = await getPersonaQueryMemory(industry.id, persona.id).catch(() => []);
-      if (recentQueries.length > 0) {
-        console.log(`${tag} Memory: ${recentQueries.length} recent queries loaded for ${persona.name}`);
-      }
+      sessionLog.debug('persona query memory loaded', { recentQueryCount: recentQueries.length });
 
       let primaryQuery = await generatePrimaryQuery(
         persona,
@@ -192,11 +200,11 @@ export class IndustryAgent {
         industry.id,
         recentQueries
       );
-      console.log(`${tag} Generated query: "${primaryQuery}"`);
+      sessionLog.info('primary query generated', { query: primaryQuery });
 
       // ── Phase 2: Validating — guardrails check ─────────────────────
       setPhase(industry.id, 'validating', { currentQuery: primaryQuery });
-      console.log(`${tag} Phase: validating`);
+      sessionLog.debug('phase: validating');
 
       let attempts = 1;
       let validation = await guardrailsAgent.validate(primaryQuery, persona, industry, attempts);
@@ -204,7 +212,7 @@ export class IndustryAgent {
       while (!validation.approved && attempts < GUARDRAIL_MAX_RETRIES) {
         attempts++;
         const retryQuery = validation.suggestedQuery ?? primaryQuery;
-        console.log(`${tag} Guardrail retry ${attempts}: "${retryQuery}"`);
+        sessionLog.info(`guardrail retry ${attempts}`, { retryQuery, rejectedQuery: primaryQuery, reason: validation.reason });
 
         const state = getOrCreateState(industry.id);
         setPhase(industry.id, 'validating', {
@@ -216,7 +224,6 @@ export class IndustryAgent {
         validation = await guardrailsAgent.validate(primaryQuery, persona, industry, attempts);
       }
 
-      // If still rejected after all retries, accept the last suggested query or proceed anyway
       if (!validation.approved) {
         const state = getOrCreateState(industry.id);
         primaryQuery = validation.suggestedQuery ?? primaryQuery;
@@ -224,17 +231,19 @@ export class IndustryAgent {
           guardrailViolations: state.guardrailViolations + 1,
           currentQuery: primaryQuery,
         });
-        console.log(`${tag} Guardrail retries exhausted — proceeding with: "${primaryQuery}"`);
+        sessionLog.warn('guardrail retries exhausted — proceeding anyway', {
+          finalQuery: primaryQuery,
+          totalAttempts: attempts,
+        });
       }
 
-      // Persist the approved query to persona memory so future sessions stay varied
       appendPersonaQuery(industry.id, persona.id, primaryQuery).catch((err) =>
-        console.warn(`${tag} Failed to save query memory for ${persona.name}:`, err)
+        sessionLog.warn('failed to save query to persona memory', { error: err instanceof Error ? err.message : String(err) })
       );
 
       // ── Phase 3: Searching — Algolia primary index ─────────────────
       setPhase(industry.id, 'searching', { currentQuery: primaryQuery });
-      console.log(`${tag} Phase: searching "${primaryQuery}"`);
+      sessionLog.debug('phase: searching', { query: primaryQuery, index: primaryIndex.indexName });
 
       const { hits: primaryHits, queryID: primaryQueryID } = await searchIndex(
         primaryIndex.indexName,
@@ -246,6 +255,7 @@ export class IndustryAgent {
 
       if (!primaryHits.length || !primaryQueryID) {
         const err = `No results for "${primaryQuery}" in "${primaryIndex.indexName}"`;
+        sessionLog.warn(err);
         await recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
         setPhase(industry.id, 'error', {
           errors: [...getOrCreateState(industry.id).errors.slice(-9), err],
@@ -253,7 +263,7 @@ export class IndustryAgent {
         return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
       }
 
-      console.log(`${tag} Got ${primaryHits.length} hits (queryID: ${primaryQueryID})`);
+      sessionLog.debug('primary search results', { hitCount: primaryHits.length, queryID: primaryQueryID });
 
       const { index: selectedIdx, reason } = await selectBestResult(
         persona,
@@ -263,7 +273,7 @@ export class IndustryAgent {
       );
       const selectedHit = primaryHits[selectedIdx] ?? primaryHits[0];
       const position = (selectedIdx ?? 0) + 1;
-      console.log(`${tag} Selected hit[${selectedIdx}]: ${reason}`);
+      sessionLog.debug('hit selected', { selectedIndex: selectedIdx, objectID: selectedHit.objectID, position, reason });
 
       const primaryEvts = buildFlexIndexEvents(
         persona,
@@ -346,7 +356,7 @@ export class IndustryAgent {
 
       // ── Phase 4: Sending — Algolia Insights API ────────────────────
       setPhase(industry.id, 'sending');
-      console.log(`${tag} Phase: sending ${allEvents.length} events`);
+      sessionLog.debug('phase: sending', { totalEvents: allEvents.length });
 
       const httpStatus = await sendEvents(allEvents, industry.id);
 
@@ -379,10 +389,17 @@ export class IndustryAgent {
           eventsSentToday: totalToday,
         });
 
-        console.log(`${tag} ✓ sent ${allEvents.length} events`);
+        sessionLog.info('session complete', {
+          sessionId,
+          totalEvents: allEvents.length,
+          eventsByIndex,
+          eventsSentToday: totalToday,
+          durationMs: Date.now() - new Date(startedAt).getTime(),
+        });
         return { eventsByIndex, totalEvents: allEvents.length, sessionId };
       } else {
         const err = `Insights API returned HTTP ${httpStatus}`;
+        sessionLog.error(err, { sessionId, httpStatus });
         await recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
         setPhase(industry.id, 'error', {
           errors: [...getOrCreateState(industry.id).errors.slice(-9), err],
@@ -391,7 +408,7 @@ export class IndustryAgent {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`${tag} uncaught error:`, err);
+      sessionLog.error('uncaught session error', err instanceof Error ? err : { message: msg });
       try {
         await recordSession(industry.id, sessionId, persona, startedAt, {}, false, msg);
       } catch { /* swallow */ }
@@ -411,13 +428,20 @@ export class IndustryAgent {
     industry: IndustryV2,
     sessionCount: number
   ): Promise<{ sessionsCompleted: number; totalEvents: number; errors: string[] }> {
-    const tag = `[Agent:${industry.id}]`;
+    const batchLog = log.child(industry.id);
 
     await resetCountersIfNewDay(industry.id);
     const counters = await getTodayCounters(industry.id);
     const totalToday = Object.values(counters.byIndex).reduce((s, n) => s + n, 0);
     const eventLimit = parseInt(process.env.DAILY_EVENT_LIMIT_PER_INDEX ?? '1000', 10);
     const indexCount = Math.max(1, industry.indices.filter((i) => i.events.length > 0).length);
+
+    batchLog.info('batch start', {
+      sessionCount,
+      personas: personas.length,
+      eventsSentToday: totalToday,
+      dailyTarget: eventLimit * indexCount,
+    });
 
     setPhase(industry.id, 'planning', {
       isActive: true,
@@ -435,34 +459,48 @@ export class IndustryAgent {
     for (let i = 0; i < sessionCount; i++) {
       const persona = shuffled[i % shuffled.length];
 
-      // Budget check before each session
       let budgetOk = true;
       for (const idx of industry.indices) {
         if (idx.events.length === 0) continue;
         const remaining = await getRemainingBudget(industry.id, idx.id);
-        if (remaining < idx.events.length) { budgetOk = false; break; }
+        if (remaining < idx.events.length) {
+          batchLog.info('budget exhausted', { afterSessions: results.sessionsCompleted, index: idx.indexName, remaining });
+          budgetOk = false;
+          break;
+        }
       }
-      if (!budgetOk) {
-        console.log(`${tag} Budget exhausted after ${results.sessionsCompleted} sessions`);
-        break;
-      }
+      if (!budgetOk) break;
 
       const result = await this.runSession(persona, industry);
 
       if (result.error) {
+        batchLog.warn('session error', { persona: persona.name, error: result.error, sessionId: result.sessionId });
         results.errors.push(`${persona.name}: ${result.error}`);
       } else {
         results.sessionsCompleted++;
         results.totalEvents += result.totalEvents;
+        batchLog.debug(`session ${results.sessionsCompleted}/${sessionCount} done`, {
+          persona: persona.name,
+          events: result.totalEvents,
+          sessionId: result.sessionId,
+        });
       }
 
       await sleep(randomInt(400, 1200));
     }
 
     setPhase(industry.id, 'idle', { isActive: false });
-    console.log(
-      `${tag} Batch done — ${results.sessionsCompleted}/${sessionCount} sessions, ${results.totalEvents} events`
-    );
+    batchLog.info('batch complete', {
+      sessionsCompleted: results.sessionsCompleted,
+      sessionsRequested: sessionCount,
+      totalEvents: results.totalEvents,
+      errors: results.errors.length,
+    });
+
+    if (results.errors.length > 0) {
+      batchLog.warn('batch had errors', { errors: results.errors });
+    }
+
     return results;
   }
 }

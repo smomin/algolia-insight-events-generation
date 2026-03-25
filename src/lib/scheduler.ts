@@ -1,6 +1,9 @@
 import cron from 'node-cron';
 import type { Persona, SchedulerRun, IndustryV2, FlexIndex } from '@/types';
 import { emitToIndustry } from '@/lib/sse';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('Scheduler');
 import {
   resetCountersIfNewDay,
   getRemainingBudget,
@@ -120,21 +123,21 @@ export async function runPersonaSession(
     return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
   }
 
-  const tag = `[${industry.id}:${persona.name}]`;
-  console.log(`${tag} session started (${sessionId})`);
+  const sessionLog = log.child(`${industry.id}:${persona.name}`);
+  sessionLog.info('session start', { sessionId });
 
   try {
     // ── 1. Generate primary search query via LLM ──
-    console.log(`${tag} step 1/5 — generating primary query via LLM`);
+    sessionLog.debug('step 1/5 — generating primary query via LLM');
     const primaryQuery = await generatePrimaryQuery(
       persona,
       industry.claudePrompts.generatePrimaryQuery,
       industry.id
     );
-    console.log(`${tag} step 1/5 — query: "${primaryQuery}"`);
+    sessionLog.info('primary query generated', { query: primaryQuery });
 
     // ── 2. Search primary index ──
-    console.log(`${tag} step 2/5 — searching "${primaryIndex.indexName}"`);
+    sessionLog.debug('step 2/5 — searching primary index', { index: primaryIndex.indexName });
     const { hits: primaryHits, queryID: primaryQueryID } = await searchIndex(
       primaryIndex.indexName,
       primaryQuery,
@@ -145,14 +148,14 @@ export async function runPersonaSession(
 
     if (!primaryHits.length || !primaryQueryID) {
       const err = `No primary results for "${primaryQuery}" in index "${primaryIndex.indexName}"`;
-      console.warn(`${tag} ${err}`);
+      sessionLog.warn(err);
       await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
-    console.log(`${tag} step 2/5 — got ${primaryHits.length} hits (queryID: ${primaryQueryID})`);
+    sessionLog.debug('step 2/5 done', { hitCount: primaryHits.length, queryID: primaryQueryID });
 
     // ── 3. LLM selects best result ──
-    console.log(`${tag} step 3/5 — LLM selecting best result`);
+    sessionLog.debug('step 3/5 — LLM selecting best result');
     const { index: selectedIdx, reason } = await selectBestResult(
       persona,
       primaryHits,
@@ -162,11 +165,11 @@ export async function runPersonaSession(
     const selectedHit = primaryHits[selectedIdx];
     const position = selectedIdx + 1;
 
-    console.log(`${tag} step 3/5 — selected hit[${selectedIdx}]: ${reason}`);
+    sessionLog.debug('step 3/5 done', { selectedIndex: selectedIdx, reason });
 
     if (!selectedHit) {
-      const err = `Claude returned an out-of-range hit index (${selectedIdx}) for ${primaryHits.length} results`;
-      console.warn(`${tag} ${err}`);
+      const err = `LLM returned an out-of-range hit index (${selectedIdx}) for ${primaryHits.length} results`;
+      sessionLog.warn(err);
       await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
@@ -181,7 +184,7 @@ export async function runPersonaSession(
       []
     );
 
-    console.log(`${tag} step 4/5 — built ${primaryEvts.length} primary events`);
+    sessionLog.debug('step 4/5 — primary events built', { count: primaryEvts.length });
 
     // ── 5. For each secondary index: search + build events ──
     const secondaryEvtsByIndex: Record<
@@ -190,7 +193,7 @@ export async function runPersonaSession(
     > = {};
 
     if (secondaryIndices.length > 0) {
-      console.log(`${tag} step 5/5 — searching ${secondaryIndices.length} secondary index(es)`);
+      sessionLog.debug(`step 5/5 — searching ${secondaryIndices.length} secondary index(es)`);
       const secQueries = await generateSecondaryQueries(
         selectedHit,
         persona,
@@ -246,7 +249,9 @@ export async function runPersonaSession(
     }
 
     // ── 6. Collect all events ──
-    console.log(`${tag} step 5/5 — secondary events built: ${JSON.stringify(Object.fromEntries(Object.entries(secondaryEvtsByIndex).map(([k, v]) => [k, v.events.length])))}`);
+    const secondaryEventCounts = Object.fromEntries(Object.entries(secondaryEvtsByIndex).map(([k, v]) => [k, v.events.length]));
+    sessionLog.debug('step 5/5 done', { secondaryEventsByIndex: secondaryEventCounts });
+
     const allEvents = [
       ...primaryEvts,
       ...Object.values(secondaryEvtsByIndex).flatMap((x) => x.events),
@@ -254,13 +259,13 @@ export async function runPersonaSession(
 
     if (allEvents.length === 0) {
       const err = 'No events built — check that indices have events configured';
-      console.warn(`${tag} ${err}`);
+      sessionLog.warn(err);
       await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
 
     // ── 7. Send all events in one batch ──
-    console.log(`${tag} sending ${allEvents.length} total events to Insights API`);
+    sessionLog.debug('sending events to Insights API', { totalEvents: allEvents.length });
     const status = await sendEvents(allEvents, industry.id);
 
     if (status === 200) {
@@ -292,20 +297,25 @@ export async function runPersonaSession(
         true
       );
 
-      console.log(
-        `${tag} ✓ sent ${allEvents.length} events across ${Object.keys(eventsByIndex).length} indices | reason: "${reason}"`
-      );
+      sessionLog.info('session complete', {
+        sessionId,
+        totalEvents: allEvents.length,
+        eventsByIndex,
+        indices: Object.keys(eventsByIndex).length,
+        durationMs: Date.now() - new Date(startedAt).getTime(),
+        reason,
+      });
 
       return { eventsByIndex, totalEvents: allEvents.length, sessionId };
     } else {
       const err = `Insights API returned HTTP ${status}`;
-      console.error(`${tag} ✗ ${err}`);
+      sessionLog.error(err, { sessionId, status });
       await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, err);
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`${tag} ✗ uncaught error:`, err);
+    sessionLog.error('uncaught session error', err instanceof Error ? err : { message: msg });
     try { await _recordSession(industry.id, sessionId, persona, startedAt, {}, false, msg); } catch { /* swallow so caller always gets a result */ }
     return { eventsByIndex: {}, totalEvents: 0, sessionId, error: msg };
   }
@@ -344,9 +354,12 @@ export async function distributeSessionsForDay(
 ): Promise<SchedulerRun> {
   const state = getState(industry.id);
 
+  const distLog = log.child(industry.id);
+
   // Guard against concurrent runs — check both in-memory and persisted state
   const persistedState = await getDistributionState(industry.id);
   if (state.isDistributing || persistedState.isDistributing) {
+    distLog.warn('distribution already in progress — skipping duplicate request');
     return (
       state.currentRun ?? {
         id: generateId(),
@@ -389,7 +402,14 @@ export async function distributeSessionsForDay(
   // Persist active state to Couchbase so status survives hot reloads
   await setDistributionActive(industry.id, run.id, true);
 
+  distLog.info('distribution start', {
+    runId: run.id,
+    personas: personas.length,
+    maxSessions: finalMax,
+  });
+
   if (finalMax === 0) {
+    distLog.warn('budget fully exhausted — no sessions to run');
     run.completedAt = new Date().toISOString();
     await appendSchedulerRun(industry.id, run);
     state.currentRun = null;
@@ -410,16 +430,14 @@ export async function distributeSessionsForDay(
     for (const persona of sessionPersonas) {
       sessionIndex++;
 
-      // Check in-memory cancel flag
       if (state.cancelRequested) {
-        console.log(`[${industry.id}] Distribution cancelled (in-memory) after ${run.sessionsCompleted} sessions`);
+        distLog.info('distribution cancelled (in-memory)', { sessionsCompleted: run.sessionsCompleted });
         break;
       }
-      // Every 5 sessions also check the persisted cancel flag (survives hot reloads)
       if (sessionIndex % 5 === 0) {
         const dist = await getDistributionState(industry.id);
         if (dist.cancelRequested) {
-          console.log(`[${industry.id}] Distribution cancelled (persisted) after ${run.sessionsCompleted} sessions`);
+          distLog.info('distribution cancelled (persisted)', { sessionsCompleted: run.sessionsCompleted });
           state.cancelRequested = true;
           break;
         }
@@ -432,15 +450,23 @@ export async function distributeSessionsForDay(
         const remaining = await getRemainingBudget(industry.id, idx.id);
         if (remaining < idx.events.length) { canRun = false; break; }
       }
-      if (!canRun) break;
+      if (!canRun) {
+        distLog.info('budget check failed — stopping distribution', { sessionsCompleted: run.sessionsCompleted });
+        break;
+      }
 
       const result = await runPersonaSession(persona, industry);
 
       if (result.error) {
+        distLog.warn('session error', { persona: persona.name, error: result.error, sessionId: result.sessionId });
         run.errors.push(`${persona.name}: ${result.error}`);
       } else {
         run.sessionsCompleted++;
         run.totalEventsSent += result.totalEvents;
+        distLog.debug(`session ${run.sessionsCompleted}/${finalMax} complete`, {
+          persona: persona.name,
+          events: result.totalEvents,
+        });
         for (const [indexId, count] of Object.entries(result.eventsByIndex)) {
           run.eventsByIndex[indexId] = (run.eventsByIndex[indexId] ?? 0) + count;
         }
@@ -453,24 +479,25 @@ export async function distributeSessionsForDay(
     }
 
     run.completedAt = new Date().toISOString();
-    try { await appendSchedulerRun(industry.id, run); } catch (e) { console.error(`[${industry.id}] Failed to persist run:`, e); }
+    try { await appendSchedulerRun(industry.id, run); } catch (e) { distLog.error('failed to persist run', e); }
   } finally {
-    // Always clear distributing state so the UI is never left stuck
     state.currentRun = null;
     state.isDistributing = false;
     state.cancelRequested = false;
-    try { await setDistributionActive(industry.id, run.id, false); } catch (e) { console.error(`[${industry.id}] Failed to clear distribution state:`, e); }
+    try { await setDistributionActive(industry.id, run.id, false); } catch (e) { distLog.error('failed to clear distribution state', e); }
     emitStatus(industry.id, { lastRun: run });
   }
 
-  console.log(
-    `[${industry.id}] Distribution complete — ` +
-    `${run.sessionsCompleted}/${run.sessionsPlanned} sessions OK, ` +
-    `${run.totalEventsSent} events sent, ` +
-    `${run.errors.length} errors`
-  );
+  distLog.info('distribution complete', {
+    sessionsCompleted: run.sessionsCompleted,
+    sessionsPlanned: run.sessionsPlanned,
+    totalEventsSent: run.totalEventsSent,
+    errorCount: run.errors.length,
+    durationMs: run.completedAt ? Date.now() - new Date(run.startedAt).getTime() : undefined,
+  });
+
   if (run.errors.length > 0) {
-    console.error(`[${industry.id}] Session errors:\n${run.errors.map((e) => `  • ${e}`).join('\n')}`);
+    distLog.warn('distribution had session errors', { errors: run.errors });
   }
 
   return run;
@@ -482,18 +509,21 @@ export async function distributeSessionsForDay(
 
 export function startScheduler(personas: Persona[], industry: IndustryV2): void {
   const state = getState(industry.id);
-  if (state.task) return;
+  if (state.task) {
+    log.child(industry.id).warn('startScheduler called but scheduler is already running');
+    return;
+  }
 
   const cronExpr = process.env.SCHEDULER_CRON ?? '0 6 * * *';
   const tz = process.env.SCHEDULER_TIMEZONE ?? 'America/Los_Angeles';
 
   state.task = cron.schedule(
     cronExpr,
-    () => { distributeSessionsForDay(personas, industry).catch(console.error); },
+    () => { distributeSessionsForDay(personas, industry).catch((err) => log.child(industry.id).error('distribution failed', err)); },
     { timezone: tz }
   );
 
-  console.log(`[Scheduler:${industry.id}] Started. Cron: "${cronExpr}" (${tz})`);
+  log.child(industry.id).info('started', { cronExpr, timezone: tz, personaCount: personas.length });
   emitStatus(industry.id);
 }
 
@@ -502,7 +532,7 @@ export function stopScheduler(industryId: string): void {
   if (state.task) {
     state.task.stop();
     state.task = null;
-    console.log(`[Scheduler:${industryId}] Stopped.`);
+    log.child(industryId).info('stopped');
     emitStatus(industryId);
   }
 }
@@ -510,10 +540,9 @@ export function stopScheduler(industryId: string): void {
 /** Cancel any in-progress distribution run for the given industry. */
 export async function cancelDistribution(industryId: string): Promise<void> {
   const state = getState(industryId);
-  // Always set both flags so cancellation works even after a hot reload
   state.cancelRequested = true;
   await setDistributionCancelRequested(industryId);
-  console.log(`[Scheduler:${industryId}] Cancel requested (in-memory + persisted).`);
+  log.child(industryId).info('cancel requested (in-memory + persisted)');
   emitStatus(industryId);
 }
 

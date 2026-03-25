@@ -9,6 +9,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { resolveLLMProvider } from './appConfig';
+import { createLogger } from './logger';
+
+const log = createLogger('LLM');
 
 // ─────────────────────────────────────────────
 // Types
@@ -59,29 +62,47 @@ export async function callLLM(
   const providerTag = provider.baseUrl
     ? `${provider.type}/${effectiveModel} @ ${provider.baseUrl}`
     : `${provider.type}/${effectiveModel}`;
-  console.log(`[LLM] ${providerTag}`);
+
+  log.debug('call start', {
+    provider: providerTag,
+    industryId,
+    maxTokens: options.maxTokens ?? 1024,
+    hasSystemPrompt: !!options.systemPrompt,
+    messageCount: messages.length,
+  });
+
+  const callStart = Date.now();
 
   switch (provider.type) {
-    case 'anthropic':
-      return callAnthropic(provider.apiKey!, effectiveModel, messages, options);
+    case 'anthropic': {
+      const result = await callAnthropic(provider.apiKey!, effectiveModel, messages, options);
+      log.debug('call complete', { provider: providerTag, durationMs: Date.now() - callStart, responseLength: result.length });
+      return result;
+    }
 
-    case 'openai':
-      return callOpenAICompatible({
+    case 'openai': {
+      const result = await callOpenAICompatible({
         apiKey: provider.apiKey!,
         baseUrl: provider.baseUrl,
         model: effectiveModel,
         messages,
         options,
       });
+      log.debug('call complete', { provider: providerTag, durationMs: Date.now() - callStart, responseLength: result.length });
+      return result;
+    }
 
-    case 'ollama':
-      return callOpenAICompatible({
-        apiKey: provider.apiKey || 'ollama', // ollama doesn't require a real key
+    case 'ollama': {
+      const result = await callOpenAICompatible({
+        apiKey: provider.apiKey || 'ollama',
         baseUrl: provider.baseUrl || 'http://localhost:11434/v1',
         model: effectiveModel,
         messages,
         options,
       });
+      log.debug('call complete', { provider: providerTag, durationMs: Date.now() - callStart, responseLength: result.length });
+      return result;
+    }
 
     default:
       throw new Error(`Unknown provider type: ${(provider as { type: string }).type}`);
@@ -100,16 +121,28 @@ async function callAnthropic(
 ): Promise<string> {
   const client = new Anthropic({ apiKey, maxRetries: 4, timeout: 60_000 });
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: options.maxTokens ?? 1024,
-    ...(options.systemPrompt ? { system: options.systemPrompt } : {}),
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
-  });
+  try {
+    const response = await client.messages.create({
+      model,
+      max_tokens: options.maxTokens ?? 1024,
+      ...(options.systemPrompt ? { system: options.systemPrompt } : {}),
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    });
 
-  const block = response.content[0];
-  if (block.type !== 'text') throw new Error('Anthropic returned a non-text response');
-  return block.text.trim();
+    log.debug('anthropic response', {
+      model,
+      inputTokens: response.usage?.input_tokens,
+      outputTokens: response.usage?.output_tokens,
+      stopReason: response.stop_reason,
+    });
+
+    const block = response.content[0];
+    if (block.type !== 'text') throw new Error('Anthropic returned a non-text response');
+    return block.text.trim();
+  } catch (err) {
+    log.error('anthropic call failed', { model, error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
 }
 
 async function callOpenAICompatible({
@@ -142,13 +175,26 @@ async function callOpenAICompatible({
     openaiMessages.push({ role: m.role, content: m.content });
   }
 
-  const response = await client.chat.completions.create({
-    model,
-    max_tokens: options.maxTokens ?? 1024,
-    messages: openaiMessages,
-  });
+  try {
+    const response = await client.chat.completions.create({
+      model,
+      max_tokens: options.maxTokens ?? 1024,
+      messages: openaiMessages,
+    });
 
-  const content = response.choices[0]?.message?.content;
-  if (!content) throw new Error('LLM returned an empty response');
-  return content.trim();
+    log.debug('openai-compatible response', {
+      model,
+      baseUrl: baseUrl ?? 'default',
+      promptTokens: response.usage?.prompt_tokens,
+      completionTokens: response.usage?.completion_tokens,
+      finishReason: response.choices[0]?.finish_reason,
+    });
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) throw new Error('LLM returned an empty response');
+    return content.trim();
+  } catch (err) {
+    log.error('openai-compatible call failed', { model, baseUrl: baseUrl ?? 'default', error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
 }

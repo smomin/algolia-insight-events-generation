@@ -1,6 +1,9 @@
 import type { Persona } from '@/types';
 import type { AlgoliaHit } from '@/lib/algolia';
 import { callLLM } from './llm';
+import { createLogger } from './logger';
+
+const log = createLogger('Anthropic');
 
 // ─────────────────────────────────────────────
 // Generic functions — driven by industry prompts
@@ -12,6 +15,12 @@ export async function generatePrimaryQuery(
   industryId?: string,
   recentQueries?: string[]
 ): Promise<string> {
+  log.debug('generatePrimaryQuery', {
+    persona: persona.name,
+    industryId,
+    recentQueryCount: recentQueries?.length ?? 0,
+  });
+
   let userContent = `Persona:\n${JSON.stringify(persona, null, 2)}`;
 
   if (recentQueries && recentQueries.length > 0) {
@@ -20,11 +29,14 @@ export async function generatePrimaryQuery(
       recentQueries.map((q) => `- "${q}"`).join('\n');
   }
 
-  return callLLM(
+  const query = await callLLM(
     [{ role: 'user', content: userContent }],
     { systemPrompt: promptInstruction, maxTokens: 100 },
     industryId
   );
+
+  log.debug('generatePrimaryQuery result', { persona: persona.name, query });
+  return query;
 }
 
 // ─────────────────────────────────────────────
@@ -72,6 +84,8 @@ export async function selectBestResult(
   promptInstruction: string,
   industryId?: string
 ): Promise<{ index: number; reason: string }> {
+  log.debug('selectBestResult', { persona: persona.name, hitCount: hits.length, industryId });
+
   const resultList = hits.map((h, i) => ({ index: i, ...summarizeHit(h) }));
 
   const text = await callLLM(
@@ -96,8 +110,10 @@ export async function selectBestResult(
     const idx = Number.isFinite(numIdx)
       ? Math.max(0, Math.min(Math.floor(numIdx), hits.length - 1))
       : 0;
+    log.debug('selectBestResult chosen', { persona: persona.name, selectedIndex: idx, reason: parsed?.reason });
     return { index: idx, reason: parsed?.reason ?? 'Auto-selected result' };
-  } catch {
+  } catch (err) {
+    log.warn('selectBestResult JSON parse failed, defaulting to index 0', { persona: persona.name, raw: text.slice(0, 100), error: err instanceof Error ? err.message : String(err) });
     return { index: 0, reason: 'Auto-selected first result' };
   }
 }
@@ -109,6 +125,12 @@ export async function generateSecondaryQueries(
   industryId?: string,
   secondaryIndices?: Array<{ id: string; label: string }>
 ): Promise<string[]> {
+  log.debug('generateSecondaryQueries', {
+    persona: persona.name,
+    primaryObjectID: primaryHit.objectID,
+    secondaryIndices: secondaryIndices?.map((s) => s.label),
+    industryId,
+  });
   const hitSummary = summarizeHit(primaryHit);
 
   const indexHint =
@@ -135,11 +157,14 @@ export async function generateSecondaryQueries(
     const parsed = JSON.parse(cleaned) as string[];
     if (!Array.isArray(parsed) || parsed.length === 0)
       throw new Error('Invalid response');
-    return parsed
-      .slice(0, 5)
-      .map((q) => String(q).trim())
-      .filter(Boolean);
-  } catch {
+    const queries = parsed.slice(0, 5).map((q) => String(q).trim()).filter(Boolean);
+    log.debug('generateSecondaryQueries result', { persona: persona.name, queries });
+    return queries;
+  } catch (err) {
+    log.warn('generateSecondaryQueries JSON parse failed, falling back to objectID', {
+      persona: persona.name,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [primaryHit.objectID];
   }
 }

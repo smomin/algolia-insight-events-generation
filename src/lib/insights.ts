@@ -6,6 +6,9 @@ import type {
   IndexEvent,
 } from '@/types';
 import { resolveCredentials } from './appConfig';
+import { createLogger } from './logger';
+
+const log = createLogger('Insights');
 
 const INSIGHTS_ENDPOINT =
   process.env.ALGOLIA_INSIGHTS_URL ?? 'https://insights.algolia.io/1/events';
@@ -24,19 +27,41 @@ export async function sendEvents(
 ): Promise<number> {
   const creds = await resolveCredentials(industryId);
   if (!creds.algoliaAppId || !creds.algoliaSearchApiKey) {
-    console.error('[insights] sendEvents: missing Algolia credentials — set them in App Settings');
+    log.error('sendEvents: missing Algolia credentials — set them in App Settings', { industryId });
     return 401;
   }
-  const response = await fetch(INSIGHTS_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'X-Algolia-Application-Id': creds.algoliaAppId,
-      'X-Algolia-API-Key': creds.algoliaSearchApiKey,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ events }),
-  });
-  return response.status;
+
+  const eventSummary = events.map((e) => ({ type: e.eventType, name: e.eventName, index: e.index }));
+  log.debug('sendEvents', { industryId, eventCount: events.length, endpoint: INSIGHTS_ENDPOINT, events: eventSummary });
+
+  const start = Date.now();
+  try {
+    const response = await fetch(INSIGHTS_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'X-Algolia-Application-Id': creds.algoliaAppId,
+        'X-Algolia-API-Key': creds.algoliaSearchApiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ events }),
+    });
+
+    log.debug('sendEvents response', {
+      industryId,
+      status: response.status,
+      durationMs: Date.now() - start,
+    });
+
+    if (response.status !== 200) {
+      const body = await response.text().catch(() => '');
+      log.warn('sendEvents non-200 response', { industryId, status: response.status, body: body.slice(0, 200) });
+    }
+
+    return response.status;
+  } catch (err) {
+    log.error('sendEvents fetch failed', { industryId, error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────

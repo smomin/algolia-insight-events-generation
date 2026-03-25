@@ -28,6 +28,7 @@ import {
   DocumentNotFoundError,
   BucketType,
 } from 'couchbase';
+import { createLogger } from './logger';
 
 // ─────────────────────────────────────────────
 // Config
@@ -93,7 +94,7 @@ async function initCluster(): Promise<Cluster> {
     }
   }
 
-  console.log(`[Couchbase] Connected. Bucket: "${BUCKET_NAME}"`);
+  createLogger('Couchbase').info(`connected`, { bucket: BUCKET_NAME });
   return cluster;
 }
 

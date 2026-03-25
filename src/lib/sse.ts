@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 
-export type SSEEventType = 'status' | 'session' | 'event-log' | 'counters' | 'agent-status' | 'guardrail' | 'supervisor';
+export type SSEEventType = 'status' | 'session' | 'event-log' | 'counters' | 'agent-status' | 'guardrail' | 'supervisor' | 'reload';
 
 // Persist emitter on globalThis so it survives Next.js hot reloads.
 // Without this, each hot reload creates a fresh emitter and active SSE
@@ -52,4 +52,26 @@ export function subscribeToStream(
     cleanups.push(() => emitter.off(channel, fn));
   }
   return () => cleanups.forEach((c) => c());
+}
+
+// ─────────────────────────────────────────────
+// Dev-mode live reload helpers
+// ─────────────────────────────────────────────
+
+const RELOAD_CHANNEL = '__dev_reload__';
+
+/**
+ * Broadcast a reload event to all connected SSE clients.
+ * Called in development when Next.js hot-reloads a server module.
+ * Clients that receive this event will close and reopen their EventSource,
+ * triggering a fresh initial state snapshot from the stream route.
+ */
+export function emitDevReload(): void {
+  emitter.emit(RELOAD_CHANNEL, { timestamp: Date.now() });
+}
+
+/** Subscribe to dev reload broadcasts. Returns an unsubscribe function. */
+export function subscribeToDevReload(handler: (data: { timestamp: number }) => void): () => void {
+  emitter.on(RELOAD_CHANNEL, handler);
+  return () => emitter.off(RELOAD_CHANNEL, handler);
 }

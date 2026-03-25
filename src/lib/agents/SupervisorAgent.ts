@@ -21,6 +21,9 @@ import { getAllIndustries, getPersonas, getEventLimit } from '@/lib/industries';
 import { getTodayCounters, resetCountersIfNewDay } from '@/lib/db';
 import { appendSupervisorDecision } from '@/lib/agentDb';
 import { industryAgent } from './IndustryAgent';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('Supervisor');
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -120,9 +123,7 @@ function calcUrgency(
 
 async function supervisorTick(): Promise<void> {
   supervisorState.lastRunAt = new Date().toISOString();
-  console.log('[Supervisor] Tick — assessing industry progress...');
 
-  // Reload personas fresh on every tick so new personas are picked up automatically
   const industries = await getAllIndustries();
   const eventLimit = getEventLimit();
   const intervalMs = parseInt(
@@ -134,8 +135,15 @@ async function supervisorTick(): Promise<void> {
   const minutesOfDay = now.getHours() * 60 + now.getMinutes();
   const fractionOfDayElapsed = minutesOfDay / 1440;
 
+  log.info('tick start', {
+    industryCount: industries.length,
+    dayElapsedPct: Math.round(fractionOfDayElapsed * 100),
+    intervalMs,
+  });
+
   for (const industry of industries) {
-    // Load personas fresh each tick — picks up new personas without restart
+    const ilog = log.child(industry.id);
+
     const personas = await getPersonas(industry);
 
     await resetCountersIfNewDay(industry.id);
@@ -147,8 +155,17 @@ async function supervisorTick(): Promise<void> {
     const eventsRemaining = Math.max(0, dailyTarget - eventsSent);
     const percentComplete = dailyTarget > 0 ? eventsSent / dailyTarget : 0;
 
-    // If no personas configured, emit a visible "blocked" decision
+    ilog.debug('progress snapshot', {
+      personas: personas.length,
+      eventsSent,
+      dailyTarget,
+      eventsRemaining,
+      percentComplete: Math.round(percentComplete * 100),
+      activeIndices: activeIndices.length,
+    });
+
     if (personas.length === 0) {
+      ilog.warn('no personas configured — skipping');
       const decision: SupervisorDecision = {
         id: generateId(),
         timestamp: new Date().toISOString(),
@@ -165,8 +182,7 @@ async function supervisorTick(): Promise<void> {
       };
       supervisorState.recentDecisions = [decision, ...supervisorState.recentDecisions].slice(0, 50);
       emitToIndustry('_supervisor', 'supervisor', decision);
-      appendSupervisorDecision(decision).catch(console.error);
-      console.log(`[Supervisor:${industry.id}] No personas configured — skipping`);
+      appendSupervisorDecision(decision).catch((err: unknown) => ilog.error('failed to persist no-persona decision', err));
       continue;
     }
 
@@ -176,6 +192,15 @@ async function supervisorTick(): Promise<void> {
       eventsRemaining,
       intervalMs
     );
+
+    ilog.info('decision', {
+      urgency,
+      sessionsToDispatch,
+      eventsSent,
+      dailyTarget,
+      percentComplete: Math.round(percentComplete * 100),
+      reasoning,
+    });
 
     const decision: SupervisorDecision = {
       id: generateId(),
@@ -198,23 +223,19 @@ async function supervisorTick(): Promise<void> {
     ].slice(0, 50);
 
     emitToIndustry('_supervisor', 'supervisor', decision);
-    appendSupervisorDecision(decision).catch(console.error);
-
-    console.log(
-      `[Supervisor:${industry.id}] ${urgency.toUpperCase()} — ` +
-      `${eventsSent}/${dailyTarget} events (${Math.round(percentComplete * 100)}%) ` +
-      `→ dispatching ${sessionsToDispatch} sessions (${personas.length} personas)`
-    );
+    appendSupervisorDecision(decision).catch((err: unknown) => ilog.error('failed to persist decision', err));
 
     if (sessionsToDispatch > 0) {
-      // Fire and forget — agent runs are async; supervisor moves on to next industry
+      ilog.info(`dispatching ${sessionsToDispatch} session(s) for ${personas.length} persona(s)`);
       industryAgent
         .runBatch(personas, industry, sessionsToDispatch)
         .catch((err: unknown) => {
-          console.error(`[Supervisor] Batch error for ${industry.id}:`, err);
+          ilog.error('batch run failed', err);
         });
     }
   }
+
+  log.info('tick complete');
 }
 
 // ─────────────────────────────────────────────
@@ -222,7 +243,10 @@ async function supervisorTick(): Promise<void> {
 // ─────────────────────────────────────────────
 
 export function startSupervisor(): void {
-  if (supervisorState.isRunning) return;
+  if (supervisorState.isRunning) {
+    log.warn('startSupervisor called but supervisor is already running');
+    return;
+  }
 
   const intervalMs = parseInt(
     process.env.AGENT_SUPERVISOR_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
@@ -232,25 +256,25 @@ export function startSupervisor(): void {
   const cronExpr = `*/${intervalMinutes} * * * *`;
 
   supervisorState.task = cron.schedule(cronExpr, () => {
-    supervisorTick().catch(console.error);
+    supervisorTick().catch((err) => log.error('tick failed', err));
   });
 
   supervisorState.isRunning = true;
   supervisorState.startedAt = new Date().toISOString();
 
-  console.log(`[Supervisor] Started — interval: ${intervalMinutes}min (cron: "${cronExpr}")`);
+  log.info('started', { intervalMinutes, cronExpr, startedAt: supervisorState.startedAt });
   emitToIndustry('_supervisor', 'supervisor', {
     type: 'started',
     timestamp: supervisorState.startedAt,
   });
 
-  // Run first assessment immediately without waiting for the first cron tick
-  supervisorTick().catch(console.error);
+  supervisorTick().catch((err) => log.error('initial tick failed', err));
 }
 
 /** Force an immediate supervisor assessment (for manual trigger / debugging). */
 export function runSupervisorTickNow(): void {
-  supervisorTick().catch(console.error);
+  log.info('manual tick triggered');
+  supervisorTick().catch((err) => log.error('manual tick failed', err));
 }
 
 export function stopSupervisor(): void {
@@ -259,7 +283,7 @@ export function stopSupervisor(): void {
     supervisorState.task = null;
   }
   supervisorState.isRunning = false;
-  console.log('[Supervisor] Stopped.');
+  log.info('stopped');
   emitToIndustry('_supervisor', 'supervisor', {
     type: 'stopped',
     timestamp: new Date().toISOString(),
