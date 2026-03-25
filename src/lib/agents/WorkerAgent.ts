@@ -1,8 +1,8 @@
 /**
- * SiteAgent — autonomous agent for a single site.
+ * WorkerAgent — autonomous agent for a single agent configuration.
  *
- * Each site becomes an agent with a distinct identity (persona + site
- * config as its system context). The agent:
+ * Each agent config becomes a worker with a distinct identity (persona +
+ * agent config as its system context). The worker:
  *  1. Plans a search query (LLM) for the current persona
  *  2. Validates the query through GuardrailsAgent (retries up to N times)
  *  3. Searches the primary Algolia index
@@ -11,11 +11,11 @@
  *  6. Reports progress back via SSE
  *
  * Agent state (phase, current query, counts) is emitted via SSE on every
- * transition so the UI can show live per-site agent cards.
+ * transition so the UI can show live per-agent cards.
  */
 
-import type { Persona, SiteConfig, AgentState, AgentPhase, FlexIndex } from '@/types';
-import { emitToSite } from '@/lib/sse';
+import type { Persona, AgentConfig, AgentState, AgentPhase, FlexIndex } from '@/types';
+import { emitToAgent } from '@/lib/sse';
 import { searchIndex } from '@/lib/algolia';
 import {
   generatePrimaryQuery,
@@ -41,28 +41,28 @@ import {
 import { guardrailsAgent, GUARDRAIL_MAX_RETRIES } from './GuardrailsAgent';
 import { createLogger } from '@/lib/logger';
 import { shuffle, sleep, randomInt, generateId } from '@/lib/utils';
-import { getEventLimit } from '@/lib/sites';
+import { getEventLimit } from '@/lib/agentConfigs';
 
-const log = createLogger('SiteAgent');
+const log = createLogger('WorkerAgent');
 
 // ─────────────────────────────────────────────
-// In-memory per-site agent state
+// In-memory per-agent state
 // Stored on globalThis so it survives Next.js hot reloads and
 // is shared across all module compilations in the same process.
 // ─────────────────────────────────────────────
 
 type AgentGlobal = typeof globalThis & {
   _agentStates?: Map<string, AgentState>;
-  _siteAgent?: SiteAgent;
+  _workerAgent?: WorkerAgent;
 };
 const gAgent = globalThis as AgentGlobal;
 if (!gAgent._agentStates) gAgent._agentStates = new Map<string, AgentState>();
 const agentStates = gAgent._agentStates;
 
-function getOrCreateState(siteId: string): AgentState {
-  if (!agentStates.has(siteId)) {
-    agentStates.set(siteId, {
-      siteId,
+function getOrCreateState(agentId: string): AgentState {
+  if (!agentStates.has(agentId)) {
+    agentStates.set(agentId, {
+      agentId,
       phase: 'idle',
       sessionsCompleted: 0,
       sessionsTarget: 0,
@@ -74,21 +74,24 @@ function getOrCreateState(siteId: string): AgentState {
       isActive: false,
     });
   }
-  return agentStates.get(siteId)!;
+  return agentStates.get(agentId)!;
 }
 
-export function getAgentStateForSite(siteId: string): AgentState {
-  return getOrCreateState(siteId);
+export function getAgentState(agentId: string): AgentState {
+  return getOrCreateState(agentId);
 }
+
+/** @deprecated Use getAgentState */
+export const getAgentStateForSite = getAgentState;
 
 export function getAllAgentStates(): Record<string, AgentState> {
   return Object.fromEntries(agentStates.entries());
 }
 
-function setPhase(siteId: string, phase: AgentPhase, extra?: Partial<AgentState>): void {
-  const state = getOrCreateState(siteId);
+function setPhase(agentId: string, phase: AgentPhase, extra?: Partial<AgentState>): void {
+  const state = getOrCreateState(agentId);
   Object.assign(state, { phase, lastActivity: new Date().toISOString(), ...extra });
-  emitToSite(siteId, 'agent-status', { ...state });
+  emitToAgent(agentId, 'agent-status', { ...state });
 }
 
 // ─────────────────────────────────────────────
@@ -104,7 +107,7 @@ function generateSessionId(): string {
 // ─────────────────────────────────────────────
 
 async function recordSession(
-  siteId: string,
+  agentId: string,
   sessionId: string,
   persona: Persona,
   startedAt: string,
@@ -112,9 +115,9 @@ async function recordSession(
   success: boolean,
   error?: string
 ): Promise<void> {
-  await appendSession(siteId, {
+  await appendSession(agentId, {
     id: sessionId,
-    siteId,
+    agentId,
     personaId: persona.id,
     personaName: persona.name,
     startedAt,
@@ -127,17 +130,17 @@ async function recordSession(
 }
 
 // ─────────────────────────────────────────────
-// SiteAgent class
+// WorkerAgent class
 // ─────────────────────────────────────────────
 
-export class SiteAgent {
+export class WorkerAgent {
   /**
-   * Run a single agentic session for the given persona + site.
+   * Run a single agentic session for the given persona + agent config.
    * Includes guardrail validation with retry before each Algolia search.
    */
   async runSession(
     persona: Persona,
-    site: SiteConfig
+    agent: AgentConfig
   ): Promise<{
     eventsByIndex: Record<string, number>;
     totalEvents: number;
@@ -146,18 +149,18 @@ export class SiteAgent {
   }> {
     const sessionId = generateSessionId();
     const startedAt = new Date().toISOString();
-    const sessionLog = log.child(`${site.id}:${persona.name}`);
+    const sessionLog = log.child(`${agent.id}:${persona.name}`);
 
     sessionLog.info('session start', { sessionId, personaId: persona.id });
 
-    const primaryIndex = site.indices.find((i) => i.role === 'primary');
-    const secondaryIndices = site.indices.filter((i) => i.role === 'secondary');
+    const primaryIndex = agent.indices.find((i) => i.role === 'primary');
+    const secondaryIndices = agent.indices.filter((i) => i.role === 'secondary');
 
     if (!primaryIndex) {
-      const err = 'No primary index configured for this site';
+      const err = 'No primary index configured for this agent';
       sessionLog.error(err);
-      setPhase(site.id, 'error', {
-        errors: [...getOrCreateState(site.id).errors.slice(-9), err],
+      setPhase(agent.id, 'error', {
+        errors: [...getOrCreateState(agent.id).errors.slice(-9), err],
       });
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
     }
@@ -169,50 +172,50 @@ export class SiteAgent {
 
     try {
       // ── Phase 1: Planning — generate search query ──────────────────
-      setPhase(site.id, 'planning', {
+      setPhase(agent.id, 'planning', {
         currentPersonaId: persona.id,
         currentPersonaName: persona.name,
         currentQuery: undefined,
       });
       sessionLog.debug('phase: planning');
 
-      const recentQueries = await getPersonaQueryMemory(site.id, persona.id).catch(() => []);
+      const recentQueries = await getPersonaQueryMemory(agent.id, persona.id).catch(() => []);
       sessionLog.debug('persona query memory loaded', { recentQueryCount: recentQueries.length });
 
       let primaryQuery = await generatePrimaryQuery(
         persona,
-        site.claudePrompts.generatePrimaryQuery,
-        site.id,
+        agent.claudePrompts.generatePrimaryQuery,
+        agent.id,
         recentQueries
       );
       sessionLog.info('primary query generated', { query: primaryQuery });
 
       // ── Phase 2: Validating — guardrails check ─────────────────────
-      setPhase(site.id, 'validating', { currentQuery: primaryQuery });
+      setPhase(agent.id, 'validating', { currentQuery: primaryQuery });
       sessionLog.debug('phase: validating');
 
       let attempts = 1;
-      let validation = await guardrailsAgent.validate(primaryQuery, persona, site, attempts);
+      let validation = await guardrailsAgent.validate(primaryQuery, persona, agent, attempts);
 
       while (!validation.approved && attempts < GUARDRAIL_MAX_RETRIES) {
         attempts++;
         const retryQuery = validation.suggestedQuery ?? primaryQuery;
         sessionLog.info(`guardrail retry ${attempts}`, { retryQuery, rejectedQuery: primaryQuery, reason: validation.reason });
 
-        const state = getOrCreateState(site.id);
-        setPhase(site.id, 'validating', {
+        const state = getOrCreateState(agent.id);
+        setPhase(agent.id, 'validating', {
           currentQuery: retryQuery,
           guardrailViolations: state.guardrailViolations + 1,
         });
 
         primaryQuery = retryQuery;
-        validation = await guardrailsAgent.validate(primaryQuery, persona, site, attempts);
+        validation = await guardrailsAgent.validate(primaryQuery, persona, agent, attempts);
       }
 
       if (!validation.approved) {
-        const state = getOrCreateState(site.id);
+        const state = getOrCreateState(agent.id);
         primaryQuery = validation.suggestedQuery ?? primaryQuery;
-        setPhase(site.id, 'validating', {
+        setPhase(agent.id, 'validating', {
           guardrailViolations: state.guardrailViolations + 1,
           currentQuery: primaryQuery,
         });
@@ -222,12 +225,12 @@ export class SiteAgent {
         });
       }
 
-      appendPersonaQuery(site.id, persona.id, primaryQuery).catch((err) =>
+      appendPersonaQuery(agent.id, persona.id, primaryQuery).catch((err) =>
         sessionLog.warn('failed to save query to persona memory', { error: err instanceof Error ? err.message : String(err) })
       );
 
       // ── Phase 3: Searching — Algolia primary index ─────────────────
-      setPhase(site.id, 'searching', { currentQuery: primaryQuery });
+      setPhase(agent.id, 'searching', { currentQuery: primaryQuery });
       sessionLog.debug('phase: searching', { query: primaryQuery, index: primaryIndex.indexName });
 
       const { hits: primaryHits, queryID: primaryQueryID } = await searchIndex(
@@ -235,15 +238,15 @@ export class SiteAgent {
         primaryQuery,
         persona.userToken,
         10,
-        site.id
+        agent.id
       );
 
       if (!primaryHits.length || !primaryQueryID) {
         const err = `No results for "${primaryQuery}" in "${primaryIndex.indexName}"`;
         sessionLog.warn(err);
-        await recordSession(site.id, sessionId, persona, startedAt, {}, false, err);
-        setPhase(site.id, 'error', {
-          errors: [...getOrCreateState(site.id).errors.slice(-9), err],
+        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err);
+        setPhase(agent.id, 'error', {
+          errors: [...getOrCreateState(agent.id).errors.slice(-9), err],
         });
         return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
       }
@@ -253,8 +256,8 @@ export class SiteAgent {
       const { index: selectedIdx, reason } = await selectBestResult(
         persona,
         primaryHits,
-        site.claudePrompts.selectBestResult,
-        site.id
+        agent.claudePrompts.selectBestResult,
+        agent.id
       );
       const selectedHit = primaryHits[selectedIdx] ?? primaryHits[0];
       const position = (selectedIdx ?? 0) + 1;
@@ -279,15 +282,15 @@ export class SiteAgent {
         const secQueries = await generateSecondaryQueries(
           selectedHit,
           persona,
-          site.claudePrompts.generateSecondaryQueries,
-          site.id,
+          agent.claudePrompts.generateSecondaryQueries,
+          agent.id,
           secondaryIndices.map((si) => ({ id: si.id, label: si.label }))
         );
 
         for (const secIdx of secondaryIndices) {
           const secResults = await Promise.all(
             secQueries.map((q) =>
-              searchIndex(secIdx.indexName, q, persona.userToken, 20, site.id).catch(() => null)
+              searchIndex(secIdx.indexName, q, persona.userToken, 20, agent.id).catch(() => null)
             )
           );
 
@@ -304,7 +307,7 @@ export class SiteAgent {
               (selectedHit.name as string) ?? (selectedHit.title as string) ?? selectedHit.objectID,
               persona.userToken,
               20,
-              site.id
+              agent.id
             ).catch(() => null);
             if (fallback?.hits.length && fallback.queryID) {
               cartProducts = [buildCartProduct(fallback.hits[0], fallback.queryID, 1)];
@@ -332,44 +335,44 @@ export class SiteAgent {
 
       if (allEvents.length === 0) {
         const err = 'No events built — verify index event configuration';
-        await recordSession(site.id, sessionId, persona, startedAt, {}, false, err);
-        setPhase(site.id, 'error', {
-          errors: [...getOrCreateState(site.id).errors.slice(-9), err],
+        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err);
+        setPhase(agent.id, 'error', {
+          errors: [...getOrCreateState(agent.id).errors.slice(-9), err],
         });
         return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
       }
 
       // ── Phase 4: Sending — Algolia Insights API ────────────────────
-      setPhase(site.id, 'sending');
+      setPhase(agent.id, 'sending');
       sessionLog.debug('phase: sending', { totalEvents: allEvents.length });
 
-      const httpStatus = await sendEvents(allEvents, site.id);
+      const httpStatus = await sendEvents(allEvents, agent.id);
 
       if (httpStatus === 200) {
         const eventsByIndex: Record<string, number> = {
           [primaryIndex.id]: primaryEvts.length,
         };
-        await incrementIndexCounter(site.id, primaryIndex.id, primaryEvts.length);
+        await incrementIndexCounter(agent.id, primaryIndex.id, primaryEvts.length);
 
         for (const [indexId, { events: evts }] of Object.entries(secondaryEvtsByIndex)) {
           eventsByIndex[indexId] = evts.length;
-          await incrementIndexCounter(site.id, indexId, evts.length);
+          await incrementIndexCounter(agent.id, indexId, evts.length);
         }
 
         const sentMeta = {
-          siteId: site.id,
+          agentId: agent.id,
           personaId: persona.id,
           personaName: persona.name,
           sessionId,
         };
-        await appendEventLog(site.id, toSentEvents(allEvents, httpStatus, sentMeta));
-        await recordSession(site.id, sessionId, persona, startedAt, eventsByIndex, true);
+        await appendEventLog(agent.id, toSentEvents(allEvents, httpStatus, sentMeta));
+        await recordSession(agent.id, sessionId, persona, startedAt, eventsByIndex, true);
 
-        const counters = await getTodayCounters(site.id);
+        const counters = await getTodayCounters(agent.id);
         const totalToday = Object.values(counters.byIndex).reduce((s, n) => s + n, 0);
-        const state = getOrCreateState(site.id);
+        const state = getOrCreateState(agent.id);
 
-        setPhase(site.id, 'complete', {
+        setPhase(agent.id, 'complete', {
           sessionsCompleted: state.sessionsCompleted + 1,
           eventsSentToday: totalToday,
         });
@@ -385,9 +388,9 @@ export class SiteAgent {
       } else {
         const err = `Insights API returned HTTP ${httpStatus}`;
         sessionLog.error(err, { sessionId, httpStatus });
-        await recordSession(site.id, sessionId, persona, startedAt, {}, false, err);
-        setPhase(site.id, 'error', {
-          errors: [...getOrCreateState(site.id).errors.slice(-9), err],
+        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err);
+        setPhase(agent.id, 'error', {
+          errors: [...getOrCreateState(agent.id).errors.slice(-9), err],
         });
         return { eventsByIndex: {}, totalEvents: 0, sessionId, error: err };
       }
@@ -395,10 +398,10 @@ export class SiteAgent {
       const msg = err instanceof Error ? err.message : String(err);
       sessionLog.error('uncaught session error', err instanceof Error ? err : { message: msg });
       try {
-        await recordSession(site.id, sessionId, persona, startedAt, {}, false, msg);
+        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, msg);
       } catch { /* swallow */ }
-      setPhase(site.id, 'error', {
-        errors: [...getOrCreateState(site.id).errors.slice(-9), msg],
+      setPhase(agent.id, 'error', {
+        errors: [...getOrCreateState(agent.id).errors.slice(-9), msg],
       });
       return { eventsByIndex: {}, totalEvents: 0, sessionId, error: msg };
     }
@@ -406,20 +409,20 @@ export class SiteAgent {
 
   /**
    * Run a batch of sessions for the day's distribution.
-   * Called by the SupervisorAgent when it decides this site needs work.
+   * Called by the SupervisorAgent when it decides this agent needs work.
    */
   async runBatch(
     personas: Persona[],
-    site: SiteConfig,
+    agent: AgentConfig,
     sessionCount: number
   ): Promise<{ sessionsCompleted: number; totalEvents: number; errors: string[] }> {
-    const batchLog = log.child(site.id);
+    const batchLog = log.child(agent.id);
 
-    await resetCountersIfNewDay(site.id);
-    const counters = await getTodayCounters(site.id);
+    await resetCountersIfNewDay(agent.id);
+    const counters = await getTodayCounters(agent.id);
     const totalToday = Object.values(counters.byIndex).reduce((s, n) => s + n, 0);
     const eventLimit = getEventLimit();
-    const indexCount = Math.max(1, site.indices.filter((i) => i.events.length > 0).length);
+    const indexCount = Math.max(1, agent.indices.filter((i) => i.events.length > 0).length);
 
     batchLog.info('batch start', {
       sessionCount,
@@ -428,7 +431,7 @@ export class SiteAgent {
       dailyTarget: eventLimit * indexCount,
     });
 
-    setPhase(site.id, 'planning', {
+    setPhase(agent.id, 'planning', {
       isActive: true,
       sessionsTarget: sessionCount,
       sessionsCompleted: 0,
@@ -445,9 +448,9 @@ export class SiteAgent {
       const persona = shuffled[i % shuffled.length];
 
       let budgetOk = true;
-      for (const idx of site.indices) {
+      for (const idx of agent.indices) {
         if (idx.events.length === 0) continue;
-        const remaining = await getRemainingBudget(site.id, idx.id);
+        const remaining = await getRemainingBudget(agent.id, idx.id);
         if (remaining < idx.events.length) {
           batchLog.info('budget exhausted', { afterSessions: results.sessionsCompleted, index: idx.indexName, remaining });
           budgetOk = false;
@@ -456,7 +459,7 @@ export class SiteAgent {
       }
       if (!budgetOk) break;
 
-      const result = await this.runSession(persona, site);
+      const result = await this.runSession(persona, agent);
 
       if (result.error) {
         batchLog.warn('session error', { persona: persona.name, error: result.error, sessionId: result.sessionId });
@@ -474,7 +477,7 @@ export class SiteAgent {
       await sleep(randomInt(400, 1200));
     }
 
-    setPhase(site.id, 'idle', { isActive: false });
+    setPhase(agent.id, 'idle', { isActive: false });
     batchLog.info('batch complete', {
       sessionsCompleted: results.sessionsCompleted,
       sessionsRequested: sessionCount,
@@ -491,5 +494,8 @@ export class SiteAgent {
 }
 
 // Singleton — shared, stateless per call; state is in the agentStates Map above
-if (!gAgent._siteAgent) gAgent._siteAgent = new SiteAgent();
-export const siteAgent = gAgent._siteAgent;
+if (!gAgent._workerAgent) gAgent._workerAgent = new WorkerAgent();
+export const workerAgent = gAgent._workerAgent;
+
+/** @deprecated Use workerAgent */
+export const siteAgent = workerAgent;

@@ -71,7 +71,19 @@ async function initCluster(): Promise<Cluster> {
   const username = process.env.COUCHBASE_USERNAME ?? 'Administrator';
   const password = process.env.COUCHBASE_PASSWORD ?? 'password';
 
-  const cluster = await connect(url, { username, password });
+  const cluster = await connect(url, {
+    username,
+    password,
+    timeouts: {
+      connectTimeout: 10_000,
+      kvTimeout: 10_000,
+      managementTimeout: 15_000,
+      queryTimeout: 10_000,
+      viewTimeout: 10_000,
+      searchTimeout: 10_000,
+      analyticsTimeout: 10_000,
+    },
+  });
 
   // ── Ensure bucket exists ──
   const bucketMgr = cluster.buckets();

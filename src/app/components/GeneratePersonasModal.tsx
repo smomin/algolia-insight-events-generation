@@ -71,7 +71,7 @@ export default function GeneratePersonasModal({
       setPhase('generating');
       addLog('info', `Asking Claude to generate ${count} personas…`);
 
-      const res = await fetch(`/api/sites/${siteId}/generate-personas`, {
+      const res = await fetch(`/api/agent-configs/${siteId}/generate-personas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ count, append }),

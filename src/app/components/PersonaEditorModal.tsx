@@ -108,7 +108,7 @@ export default function PersonaEditorModal({
         ...extraObj,
       };
 
-      const res = await fetch(`/api/sites/${siteId}/personas`, {
+      const res = await fetch(`/api/agent-configs/${siteId}/personas`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated),
@@ -129,7 +129,7 @@ export default function PersonaEditorModal({
     setError(null);
     try {
       const res = await fetch(
-        `/api/sites/${siteId}/personas?personaId=${encodeURIComponent(persona.id)}`,
+        `/api/agent-configs/${siteId}/personas?personaId=${encodeURIComponent(persona.id)}`,
         { method: 'DELETE' }
       );
       const data = (await res.json()) as { ok?: boolean; error?: string };

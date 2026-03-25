@@ -3,56 +3,56 @@ import {
   startScheduler,
   isSchedulerRunning,
   distributeSessionsForDay,
-  getNextRunTimeForSite,
+  getNextRunTimeForAgent,
 } from '@/lib/scheduler';
-import { getSite, getPersonas, getAllSites } from '@/lib/sites';
+import { getAgent, getPersonas, getAllAgents } from '@/lib/agentConfigs';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const siteId = body.siteId as string | undefined;
+    const agentId = (body.agentId as string | undefined) ?? (body.siteId as string | undefined);
     const runNow = body.runNow === true;
     const startAll = body.startAll === true;
 
     if (startAll) {
-      const sites = await getAllSites();
+      const agents = await getAllAgents();
       await Promise.all(
-        sites.map(async (site) => {
-          const personas = await getPersonas(site);
-          if (!isSchedulerRunning(site.id)) startScheduler(personas, site);
-          if (runNow) distributeSessionsForDay(personas, site).catch(console.error);
+        agents.map(async (agent) => {
+          const personas = await getPersonas(agent);
+          if (!isSchedulerRunning(agent.id)) startScheduler(personas, agent);
+          if (runNow) distributeSessionsForDay(personas, agent).catch(console.error);
         })
       );
       return NextResponse.json({
         started: true,
         startAll: true,
-        sites: sites.map((s) => ({
-          id: s.id,
-          name: s.name,
-          nextRun: getNextRunTimeForSite(s.id),
+        agents: agents.map((a) => ({
+          id: a.id,
+          name: a.name,
+          nextRun: getNextRunTimeForAgent(a.id),
         })),
-        message: `All ${sites.length} site schedulers started.`,
+        message: `All ${agents.length} agent schedulers started.`,
       });
     }
 
-    const id = siteId ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
-    const site = await getSite(id);
-    if (!site) {
-      return NextResponse.json({ error: `Site "${id}" not found` }, { status: 404 });
+    const id = agentId ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const agent = await getAgent(id);
+    if (!agent) {
+      return NextResponse.json({ error: `Agent "${id}" not found` }, { status: 404 });
     }
 
-    const personas = await getPersonas(site);
-    if (!isSchedulerRunning(id)) startScheduler(personas, site);
-    if (runNow) distributeSessionsForDay(personas, site).catch(console.error);
+    const personas = await getPersonas(agent);
+    if (!isSchedulerRunning(id)) startScheduler(personas, agent);
+    if (runNow) distributeSessionsForDay(personas, agent).catch(console.error);
 
     return NextResponse.json({
       started: true,
-      siteId: id,
+      agentId: id,
       running: isSchedulerRunning(id),
-      nextRun: getNextRunTimeForSite(id),
+      nextRun: getNextRunTimeForAgent(id),
       message: runNow
-        ? `Scheduler started and immediate run triggered for ${site.name}.`
-        : `Scheduler started for ${site.name}.`,
+        ? `Scheduler started and immediate run triggered for ${agent.name}.`
+        : `Scheduler started for ${agent.name}.`,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

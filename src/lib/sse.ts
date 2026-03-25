@@ -13,40 +13,43 @@ if (!g._sseEmitter) {
 const emitter = g._sseEmitter;
 
 /**
- * Emit an event for a specific site channel.
+ * Emit an event for a specific agent channel.
  * For 'status' events, also broadcasts a lightweight update to the '_global'
  * channel so page.tsx can update the header running-dots without subscribing
- * to every site individually.
+ * to every agent individually.
  */
-export function emitToSite(
-  siteId: string,
+export function emitToAgent(
+  agentId: string,
   type: SSEEventType,
   data: unknown
 ): void {
-  emitter.emit(`${siteId}:${type}`, data);
+  emitter.emit(`${agentId}:${type}`, data);
   if (type === 'status') {
     const d = data as { isRunning?: boolean; isDistributing?: boolean };
     emitter.emit('_global:status', {
-      siteId,
+      agentId,
       isRunning: d.isRunning ?? false,
       isDistributing: d.isDistributing ?? false,
     });
   }
 }
 
+/** @deprecated Use emitToAgent */
+export const emitToSite = emitToAgent;
+
 /**
- * Subscribe to SSE events for a site channel.
- * Pass '_global' as siteId to receive cross-site status updates.
+ * Subscribe to SSE events for an agent channel.
+ * Pass '_global' as agentId to receive cross-agent status updates.
  * Returns an unsubscribe / cleanup function.
  */
 export function subscribeToStream(
-  siteId: string,
+  agentId: string,
   types: SSEEventType[],
   handler: (type: SSEEventType, data: unknown) => void
 ): () => void {
   const cleanups: Array<() => void> = [];
   for (const type of types) {
-    const channel = `${siteId}:${type}`;
+    const channel = `${agentId}:${type}`;
     const fn = (data: unknown) => handler(type, data);
     emitter.on(channel, fn);
     cleanups.push(() => emitter.off(channel, fn));

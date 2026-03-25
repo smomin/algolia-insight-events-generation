@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { useSSE } from '@/app/hooks/useSSE';
+import { useState, useCallback, useEffect } from 'react';
 
 interface SessionRecord {
   id: string;
-  siteId: string;
+  agentId?: string;
+  /** @deprecated use agentId */
+  siteId?: string;
   personaId: string;
   personaName: string;
   startedAt: string;
@@ -17,8 +18,13 @@ interface SessionRecord {
 }
 
 interface SessionHistoryProps {
-  siteId: string;
-  isActive?: boolean; // true while a distribution run is in progress (for LIVE badge)
+  agentId: string;
+  isActive?: boolean;
+  /** Live sessions streamed from the parent's SSE connection. When provided the
+   *  component does not need its own SSE connection. */
+  sessions?: SessionRecord[];
+  /** Timestamp of the last SSE update received by the parent. */
+  lastUpdated?: Date | null;
 }
 
 function formatDuration(start: string, end: string): string {
@@ -28,131 +34,189 @@ function formatDuration(start: string, end: string): string {
 }
 
 function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString();
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-export default function SessionHistory({ siteId, isActive = false }: SessionHistoryProps) {
-  const [sessions, setSessions] = useState<SessionRecord[]>([]);
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+export default function SessionHistory({ agentId, isActive = false, sessions: sessionsProp, lastUpdated: lastUpdatedProp }: SessionHistoryProps) {
+  // Local state is used when the parent has no SSE data yet (before initial
+  // snapshot arrives) or when the user presses Refresh to force a REST fetch.
+  const [sessionsLocal, setSessionsLocal] = useState<SessionRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [localLastUpdated, setLocalLastUpdated] = useState<Date | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // ── SSE — receive initial snapshot + live session records ────────────
-  const sseUrl = `/api/stream?siteId=${siteId}&types=session`;
+  // Prefer parent-streamed data; fall back to locally fetched data.
+  const sessions = sessionsProp ?? sessionsLocal;
+  const lastUpdated = lastUpdatedProp !== undefined ? lastUpdatedProp : localLastUpdated;
 
-  useSSE(sseUrl, ['session'], (_, rawData) => {
-    const data = rawData as {
-      session?: SessionRecord;
-      sessions?: SessionRecord[];
-      initial?: boolean;
-      cleared?: boolean;
-    };
-    if (data.initial || data.cleared) {
-      setSessions(data.sessions ?? []);
-    } else if (data.session) {
-      // Prepend newest session and cap at 200
-      setSessions((prev) => [data.session!, ...prev].slice(0, 200));
+  // If the parent hasn't pushed any sessions yet (undefined = not arrived),
+  // auto-fetch via REST so the tab doesn't start empty.
+  useEffect(() => {
+    if (sessionsProp === undefined) {
+      console.debug(`[DEBUG:SessionHistory] no SSE data from parent for "${agentId}" — fetching via REST`);
+      fetchSessions();
     }
-    setLastUpdated(new Date());
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
 
-  // ── Manual refresh (one-time REST fetch) ─────────────────────────────
   const fetchSessions = useCallback(async () => {
+    setLoading(true);
+    console.debug(`[DEBUG:SessionHistory] fetching /api/sessions?agentId=${agentId}&limit=50`);
     try {
-      const res = await fetch(`/api/sessions?siteId=${siteId}&limit=50`);
+      const res = await fetch(`/api/sessions?agentId=${agentId}&limit=50`);
+      console.debug(`[DEBUG:SessionHistory] fetch response status=${res.status} ok=${res.ok}`);
       if (res.ok) {
         const data = await res.json();
-        setSessions(data.sessions ?? []);
-        setLastUpdated(new Date());
+        const count = data.sessions?.length ?? 0;
+        console.debug(`[DEBUG:SessionHistory] fetched ${count} sessions`);
+        setSessionsLocal(data.sessions ?? []);
+        setLocalLastUpdated(new Date());
+      } else {
+        const text = await res.text();
+        console.error(`[DEBUG:SessionHistory] fetch failed — HTTP ${res.status}:`, text);
       }
-    } catch {
-      /* ignore */
+    } catch (err) {
+      console.error(`[DEBUG:SessionHistory] fetch error:`, err);
+    } finally {
+      setLoading(false);
     }
-  }, [siteId]);
+  }, [agentId]);
 
   const handleClear = async () => {
     setLoading(true);
     try {
-      await fetch(`/api/sessions?siteId=${siteId}`, { method: 'DELETE' });
-      setSessions([]);
+      await fetch(`/api/sessions?agentId=${agentId}`, { method: 'DELETE' });
+      setSessionsLocal([]);
     } finally {
       setLoading(false);
     }
   };
 
   const successCount = sessions.filter((s) => s.success).length;
+  const failCount = sessions.length - successCount;
   const totalEvents = sessions.reduce((s, r) => s + r.totalEventsCount, 0);
+  const successRate = sessions.length > 0 ? Math.round((successCount / sessions.length) * 100) : 0;
 
   const allIndexIds = Array.from(
     new Set(sessions.flatMap((s) => Object.keys(s.eventsByIndex ?? {})))
   );
 
+  // Group sessions by date for display
+  const sessionsByDate: { date: string; sessions: SessionRecord[] }[] = [];
+  for (const session of sessions) {
+    const date = formatDate(session.startedAt);
+    const group = sessionsByDate.find((g) => g.date === date);
+    if (group) {
+      group.sessions.push(session);
+    } else {
+      sessionsByDate.push({ date, sessions: [session] });
+    }
+  }
+
   return (
-    <div className="bg-slate-800 rounded-xl border border-slate-700">
+    <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-white">Session History</h2>
+            <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <h2 className="text-base font-semibold text-white">Session History</h2>
             {isActive && (
-              <span className="flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span className="flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-400 border border-violet-500/30">
+                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
                 LIVE
               </span>
             )}
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            {sessions.length} sessions · {successCount} successful · live via SSE
-            {lastUpdated && <span className="ml-2">· updated {lastUpdated.toLocaleTimeString()}</span>}
+            {sessions.length} sessions · live via SSE
+            {lastUpdated && <span> · {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>}
           </p>
         </div>
         <div className="flex gap-2">
           <button
             onClick={fetchSessions}
-            className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600 hover:border-slate-400 transition-colors"
+            disabled={loading}
+            className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600 hover:border-slate-400 transition-colors disabled:opacity-50 flex items-center gap-1"
           >
+            {loading ? (
+              <span className="w-3 h-3 border border-slate-400/30 border-t-slate-400 rounded-full animate-spin" />
+            ) : (
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            )}
             Refresh
           </button>
           <button
             onClick={handleClear}
             disabled={loading || sessions.length === 0}
-            className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 px-2 py-1 rounded border border-red-800 hover:border-red-600 transition-colors"
+            className="text-xs text-rose-400 hover:text-rose-300 disabled:opacity-40 px-2 py-1 rounded border border-rose-800/60 hover:border-rose-600 transition-colors"
           >
             Clear
           </button>
         </div>
       </div>
 
-      {/* Summary stats */}
+      {/* Summary stats bar */}
       {sessions.length > 0 && (
-        <div className="grid border-b border-slate-700" style={{ gridTemplateColumns: `repeat(${2 + allIndexIds.length}, minmax(0, 1fr))` }}>
+        <div className="grid border-b border-slate-700 bg-slate-800/60" style={{
+          gridTemplateColumns: `repeat(${3 + allIndexIds.length}, minmax(0, 1fr))`
+        }}>
           {[
-            { label: 'Sessions', value: sessions.length, color: 'text-white' },
+            { label: 'Sessions', value: sessions.length, sub: null, color: 'text-white' },
             ...allIndexIds.map((id, i) => ({
               label: id,
               value: sessions.reduce((s, r) => s + (r.eventsByIndex?.[id] ?? 0), 0),
+              sub: null,
               color: i === 0 ? 'text-blue-400' : 'text-purple-400',
             })),
-            { label: 'Total Events', value: totalEvents, color: 'text-emerald-400' },
-          ].map(({ label, value, color }) => (
-            <div key={label} className="px-4 py-3 text-center border-r border-slate-700 last:border-r-0">
-              <p className={`text-xl font-bold ${color}`}>{value.toLocaleString()}</p>
+            { label: 'Total Events', value: totalEvents, sub: null, color: 'text-emerald-400' },
+            {
+              label: 'Success Rate',
+              value: `${successRate}%`,
+              sub: `${failCount > 0 ? `${failCount} failed` : 'all passed'}`,
+              color: successRate === 100 ? 'text-emerald-400' : successRate >= 80 ? 'text-amber-400' : 'text-rose-400',
+            },
+          ].map(({ label, value, sub, color }) => (
+            <div key={label} className="px-4 py-3 text-center border-r border-slate-700/50 last:border-r-0">
+              <p className={`text-xl font-bold ${color}`}>{value}</p>
               <p className="text-[10px] text-slate-500 mt-0.5 truncate">{label}</p>
+              {sub && <p className="text-[10px] text-slate-600 mt-0.5">{sub}</p>}
             </div>
           ))}
         </div>
       )}
 
       {/* Session rows */}
-      <div className="overflow-x-auto max-h-96 overflow-y-auto">
+      <div className="overflow-y-auto max-h-[520px]">
         {sessions.length === 0 ? (
-          <div className="flex items-center justify-center h-28 text-slate-500 text-sm">
-            No sessions yet. Run a session to see history here.
+          <div className="flex flex-col items-center justify-center h-32 gap-2">
+            <svg className="w-8 h-8 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-slate-500 text-sm">No sessions yet</p>
+            <p className="text-slate-600 text-xs">Start the agent or run a persona manually to see history</p>
           </div>
         ) : (
           <table className="w-full text-left">
-            <thead className="sticky top-0 bg-slate-800 border-b border-slate-700">
+            <thead className="sticky top-0 bg-slate-800/95 border-b border-slate-700">
               <tr>
-                {['Time', 'Persona', ...allIndexIds, 'Total', 'Duration', 'Status / Error'].map((h) => (
+                {['Time', 'Persona', ...allIndexIds, 'Total', 'Duration', 'Status'].map((h) => (
                   <th
                     key={h}
                     className="px-3 py-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap"
@@ -163,49 +227,71 @@ export default function SessionHistory({ siteId, isActive = false }: SessionHist
               </tr>
             </thead>
             <tbody>
-              {sessions.map((session) => (
-                <tr
-                  key={session.id}
-                  className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors"
-                >
-                  <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
-                    {formatTime(session.startedAt)}
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="text-xs font-medium text-slate-200">{session.personaName}</div>
-                    <div className="text-[10px] text-slate-600">{session.personaId}</div>
-                  </td>
-                  {allIndexIds.map((id, i) => (
-                    <td key={id} className={`px-3 py-2 text-xs font-semibold ${i === 0 ? 'text-blue-400' : 'text-purple-400'}`}>
-                      {session.eventsByIndex?.[id] ?? 0}
+              {sessionsByDate.map(({ date, sessions: dateSessions }) => (
+                <>
+                  <tr key={`date-${date}`}>
+                    <td colSpan={4 + allIndexIds.length} className="px-3 py-1.5 bg-slate-900/30">
+                      <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{date}</span>
                     </td>
+                  </tr>
+                  {dateSessions.map((session) => (
+                    <>
+                      <tr
+                        key={session.id}
+                        className="border-b border-slate-700/40 hover:bg-slate-700/30 transition-colors cursor-pointer"
+                        onClick={() => setExpandedId((p) => p === session.id ? null : session.id)}
+                      >
+                        <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
+                          {formatTime(session.startedAt)}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="text-xs font-medium text-slate-200">{session.personaName}</div>
+                          <div className="text-[10px] text-slate-600 truncate max-w-[120px]">{session.personaId}</div>
+                        </td>
+                        {allIndexIds.map((id, i) => (
+                          <td key={id} className={`px-3 py-2 text-xs font-semibold tabular-nums ${i === 0 ? 'text-blue-400' : 'text-purple-400'}`}>
+                            {session.eventsByIndex?.[id] ?? 0}
+                          </td>
+                        ))}
+                        <td className="px-3 py-2 text-xs text-emerald-400 font-semibold tabular-nums">
+                          {session.totalEventsCount}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap tabular-nums">
+                          {formatDuration(session.startedAt, session.completedAt)}
+                        </td>
+                        <td className="px-3 py-2">
+                          {session.success ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                              </svg>
+                              OK
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-full">
+                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                              ERR
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                      {expandedId === session.id && session.error && (
+                        <tr key={`${session.id}-error`} className="border-b border-slate-700/40 bg-rose-900/10">
+                          <td colSpan={4 + allIndexIds.length} className="px-4 py-2">
+                            <div className="flex items-start gap-2">
+                              <svg className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                              <p className="text-xs text-rose-300 leading-snug">{session.error}</p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
                   ))}
-                  <td className="px-3 py-2 text-xs text-emerald-400 font-semibold">
-                    {session.totalEventsCount}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
-                    {formatDuration(session.startedAt, session.completedAt)}
-                  </td>
-                  <td className="px-3 py-2">
-                    {session.success ? (
-                      <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                        OK
-                      </span>
-                    ) : (
-                      <div className="relative group inline-block">
-                        <span className="text-[10px] font-semibold text-red-400 bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded-full cursor-help">
-                          ERR
-                        </span>
-                        {session.error && (
-                          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 hidden group-hover:block w-64 bg-slate-800 border border-red-500/30 rounded-lg shadow-xl px-3 py-2">
-                            <p className="text-xs text-red-300 leading-snug break-words">{session.error}</p>
-                            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800" />
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                </tr>
+                </>
               ))}
             </tbody>
           </table>

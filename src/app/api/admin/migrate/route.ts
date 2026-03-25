@@ -27,7 +27,7 @@
 
 import { NextResponse } from 'next/server';
 import { getCollection } from '@/lib/couchbase';
-import type { SiteConfig, Persona, SentEvent, SessionRecord, SchedulerRun } from '@/types';
+import type { AgentConfig, Persona, SentEvent, SessionRecord, SchedulerRun } from '@/types';
 
 // ─────────────────────────────────────────────
 // Low-level helpers — bypass the CollectionName type guard so we can
@@ -94,7 +94,7 @@ export async function POST() {
     let siteConfigsMigrated = 0;
 
     for (const id of siteIds) {
-      const doc = await legacyGet<SiteConfig>('industryConfigs', id);
+      const doc = await legacyGet<AgentConfig>('industryConfigs', id);
       if (!doc) {
         log.push({ step: `copy siteConfig:${id}`, status: 'warn', detail: 'Document not found in industryConfigs' });
         continue;

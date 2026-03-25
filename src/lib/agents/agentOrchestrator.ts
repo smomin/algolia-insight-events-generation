@@ -2,7 +2,7 @@
  * AgentOrchestrator — top-level lifecycle manager for the agentic system.
  *
  * Responsible for:
- *  - Loading personas for all sites on startup
+ *  - Loading personas for all agents on startup
  *  - Starting / stopping the SupervisorAgent
  *  - Exposing unified status for the API layer
  *
@@ -16,8 +16,7 @@ import {
   getSupervisorStatus,
   runSupervisorTickNow,
 } from './SupervisorAgent';
-import { getAllAgentStates } from './SiteAgent';
-import { getSupervisorDecisions } from '@/lib/agentDb';
+import { getAllAgentStates } from './WorkerAgent';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('Orchestrator');
@@ -72,11 +71,12 @@ export function triggerSupervisorNow(): void {
   runSupervisorTickNow();
 }
 
-export async function getAgentSystemStatus(): Promise<AgentSystemStatus> {
+export function getAgentSystemStatus(): AgentSystemStatus {
   const supervisorStatus = getSupervisorStatus();
   const agentStates = getAllAgentStates();
-  const recentDecisions = await getSupervisorDecisions();
 
+  // Use in-memory decisions already maintained by SupervisorAgent on globalThis —
+  // avoids a Couchbase round-trip on every status poll which could hang the API.
   return {
     isActive: state.isActive,
     startedAt: state.startedAt,
@@ -87,6 +87,6 @@ export async function getAgentSystemStatus(): Promise<AgentSystemStatus> {
       lastRunAt: supervisorStatus.lastRunAt,
     },
     agents: agentStates,
-    recentDecisions: recentDecisions.slice(0, 20),
+    recentDecisions: supervisorStatus.recentDecisions.slice(0, 20),
   };
 }

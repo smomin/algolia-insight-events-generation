@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import type { SiteConfig, FlexIndex, IndexEvent, AlgoliaEventType, AlgoliaEventSubtype, LLMProviderType } from '@/types';
+import type { AgentConfig, FlexIndex, IndexEvent, AlgoliaEventType, AlgoliaEventSubtype, LLMProviderType } from '@/types';
 
 // ─────────────────────────────────────────────
 // Constants
@@ -129,7 +129,7 @@ function makeIndexForm(role: 'primary' | 'secondary' = 'secondary'): IndexForm {
   };
 }
 
-function siteToForm(site: SiteConfig): SiteForm {
+function siteToForm(site: AgentConfig): SiteForm {
   return {
     id: site.id,
     name: site.name,
@@ -157,7 +157,7 @@ function siteToForm(site: SiteConfig): SiteForm {
   };
 }
 
-function formToSite(form: SiteForm): Omit<SiteConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'> {
+function formToSite(form: SiteForm): Omit<AgentConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'> {
   return {
     id: form.id.trim().toLowerCase().replace(/\s+/g, '_'),
     name: form.name.trim(),
@@ -193,9 +193,9 @@ function formToSite(form: SiteForm): Omit<SiteConfig, 'isBuiltIn' | 'createdAt' 
 
 interface SiteEditorProps {
   siteId?: string;              // undefined = create mode
-  initialSite?: SiteConfig;     // pre-loaded site data — skips the fetch when provided
+  initialSite?: AgentConfig;    // pre-loaded agent data — skips the fetch when provided
   appConfig?: AppConfigStatus;  // pre-loaded app config — skips the /api/app-config fetch
-  onSaved: (site: SiteConfig) => void;
+  onSaved: (agent: AgentConfig) => void;
   onClose: () => void;
 }
 
@@ -469,11 +469,11 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
   useEffect(() => {
     // Skip fetch if we already have the data from the parent
     if (!siteId || initialSite) return;
-    fetch(`/api/sites/${siteId}`)
+    fetch(`/api/agent-configs/${siteId}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.site) setForm(siteToForm(data.site as SiteConfig));
-        else setError(data.error ?? 'Failed to load site');
+        if (data.agent) setForm(siteToForm(data.agent as AgentConfig));
+        else setError(data.error ?? 'Failed to load agent');
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Network error'))
       .finally(() => setLoading(false));
@@ -523,13 +523,13 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
       let res: Response;
 
       if (isCreate) {
-        res = await fetch('/api/sites', {
+        res = await fetch('/api/agent-configs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
       } else {
-        res = await fetch(`/api/sites/${siteId}`, {
+        res = await fetch(`/api/agent-configs/${siteId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -540,7 +540,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
       if (!res.ok) {
         setError(data.error ?? 'Save failed');
       } else {
-        onSaved(data.site as SiteConfig);
+        onSaved((data.agent ?? data.site) as AgentConfig);
       }
     } catch {
       setError('Network error — please try again');

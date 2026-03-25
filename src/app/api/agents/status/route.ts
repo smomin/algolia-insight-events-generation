@@ -3,9 +3,9 @@ import { getAgentSystemStatus } from '@/lib/agents/agentOrchestrator';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export function GET() {
   try {
-    const status = await getAgentSystemStatus();
+    const status = getAgentSystemStatus();
     return NextResponse.json(status);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

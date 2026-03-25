@@ -1,10 +1,10 @@
 /**
- * SupervisorAgent — singleton orchestrator for all site agents.
+ * SupervisorAgent — singleton orchestrator for all worker agents.
  *
  * Runs on a configurable interval (default 10 minutes). On each tick it:
- *  1. Checks the current event progress for every site
+ *  1. Checks the current event progress for every agent
  *  2. Calculates urgency by comparing % of target complete vs % of day elapsed
- *  3. Dispatches SiteAgent.runBatch() for sites that are behind
+ *  3. Dispatches WorkerAgent.runBatch() for agents that are behind
  *  4. Emits a SupervisorDecision via SSE and persists it to Couchbase
  *
  * Urgency tiers:
@@ -16,11 +16,11 @@
 
 import cron, { type ScheduledTask } from 'node-cron';
 import type { SupervisorDecision, SupervisorUrgency } from '@/types';
-import { emitToSite } from '@/lib/sse';
-import { getAllSites, getPersonas, getEventLimit } from '@/lib/sites';
+import { emitToAgent } from '@/lib/sse';
+import { getAllAgents, getPersonas, getEventLimit } from '@/lib/agentConfigs';
 import { getTodayCounters, resetCountersIfNewDay } from '@/lib/db';
 import { appendSupervisorDecision } from '@/lib/agentDb';
-import { siteAgent } from './SiteAgent';
+import { workerAgent } from './WorkerAgent';
 import { createLogger } from '@/lib/logger';
 import { generateId } from '@/lib/utils';
 
@@ -125,7 +125,7 @@ function calcUrgency(
 async function supervisorTick(): Promise<void> {
   supervisorState.lastRunAt = new Date().toISOString();
 
-  const sites = await getAllSites();
+  const agents = await getAllAgents();
   const eventLimit = getEventLimit();
   const intervalMs = parseInt(
     process.env.AGENT_SUPERVISOR_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
@@ -137,26 +137,26 @@ async function supervisorTick(): Promise<void> {
   const fractionOfDayElapsed = minutesOfDay / 1440;
 
   log.info('tick start', {
-    siteCount: sites.length,
+    agentCount: agents.length,
     dayElapsedPct: Math.round(fractionOfDayElapsed * 100),
     intervalMs,
   });
 
-  for (const site of sites) {
-    const slog = log.child(site.id);
+  for (const agent of agents) {
+    const alog = log.child(agent.id);
 
-    const personas = await getPersonas(site);
+    const personas = await getPersonas(agent);
 
-    await resetCountersIfNewDay(site.id);
-    const counters = await getTodayCounters(site.id);
+    await resetCountersIfNewDay(agent.id);
+    const counters = await getTodayCounters(agent.id);
     const eventsSent = Object.values(counters.byIndex).reduce((s, n) => s + n, 0);
 
-    const activeIndices = site.indices.filter((i) => i.events.length > 0);
+    const activeIndices = agent.indices.filter((i) => i.events.length > 0);
     const dailyTarget = eventLimit * Math.max(1, activeIndices.length);
     const eventsRemaining = Math.max(0, dailyTarget - eventsSent);
     const percentComplete = dailyTarget > 0 ? eventsSent / dailyTarget : 0;
 
-    slog.debug('progress snapshot', {
+    alog.debug('progress snapshot', {
       personas: personas.length,
       eventsSent,
       dailyTarget,
@@ -166,15 +166,15 @@ async function supervisorTick(): Promise<void> {
     });
 
     if (personas.length === 0) {
-      slog.warn('no personas configured — skipping');
+      alog.warn('no personas configured — skipping');
       const decision: SupervisorDecision = {
         id: supervisorId(),
         timestamp: new Date().toISOString(),
-        siteId: site.id,
-        siteName: site.name,
+        agentId: agent.id,
+        agentName: agent.name,
         urgency: 'normal',
         sessionsDispatched: 0,
-        reasoning: '⚠ No personas configured — add personas in the Sites tab to enable autonomous generation.',
+        reasoning: '⚠ No personas configured — add personas in the Agents tab to enable autonomous generation.',
         progressSnapshot: {
           sent: eventsSent,
           target: dailyTarget,
@@ -182,8 +182,8 @@ async function supervisorTick(): Promise<void> {
         },
       };
       supervisorState.recentDecisions = [decision, ...supervisorState.recentDecisions].slice(0, 50);
-      emitToSite('_supervisor', 'supervisor', decision);
-      appendSupervisorDecision(decision).catch((err: unknown) => slog.error('failed to persist no-persona decision', err));
+      emitToAgent('_supervisor', 'supervisor', decision);
+      appendSupervisorDecision(decision).catch((err: unknown) => alog.error('failed to persist no-persona decision', err));
       continue;
     }
 
@@ -194,7 +194,7 @@ async function supervisorTick(): Promise<void> {
       intervalMs
     );
 
-    slog.info('decision', {
+    alog.info('decision', {
       urgency,
       sessionsToDispatch,
       eventsSent,
@@ -206,8 +206,8 @@ async function supervisorTick(): Promise<void> {
     const decision: SupervisorDecision = {
       id: supervisorId(),
       timestamp: new Date().toISOString(),
-      siteId: site.id,
-      siteName: site.name,
+      agentId: agent.id,
+      agentName: agent.name,
       urgency,
       sessionsDispatched: sessionsToDispatch,
       reasoning: `${personas.length} persona${personas.length !== 1 ? 's' : ''} · ${reasoning}`,
@@ -223,15 +223,15 @@ async function supervisorTick(): Promise<void> {
       ...supervisorState.recentDecisions,
     ].slice(0, 50);
 
-    emitToSite('_supervisor', 'supervisor', decision);
-    appendSupervisorDecision(decision).catch((err: unknown) => slog.error('failed to persist decision', err));
+    emitToAgent('_supervisor', 'supervisor', decision);
+    appendSupervisorDecision(decision).catch((err: unknown) => alog.error('failed to persist decision', err));
 
     if (sessionsToDispatch > 0) {
-      slog.info(`dispatching ${sessionsToDispatch} session(s) for ${personas.length} persona(s)`);
-      siteAgent
-        .runBatch(personas, site, sessionsToDispatch)
+      alog.info(`dispatching ${sessionsToDispatch} session(s) for ${personas.length} persona(s)`);
+      workerAgent
+        .runBatch(personas, agent, sessionsToDispatch)
         .catch((err: unknown) => {
-          slog.error('batch run failed', err);
+          alog.error('batch run failed', err);
         });
     }
   }
@@ -264,7 +264,7 @@ export function startSupervisor(): void {
   supervisorState.startedAt = new Date().toISOString();
 
   log.info('started', { intervalMinutes, cronExpr, startedAt: supervisorState.startedAt });
-  emitToSite('_supervisor', 'supervisor', {
+  emitToAgent('_supervisor', 'supervisor', {
     type: 'started',
     timestamp: supervisorState.startedAt,
   });
@@ -285,7 +285,7 @@ export function stopSupervisor(): void {
   }
   supervisorState.isRunning = false;
   log.info('stopped');
-  emitToSite('_supervisor', 'supervisor', {
+  emitToAgent('_supervisor', 'supervisor', {
     type: 'stopped',
     timestamp: new Date().toISOString(),
   });

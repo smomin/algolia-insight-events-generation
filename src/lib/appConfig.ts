@@ -1,19 +1,19 @@
 /**
- * App-level and per-site credential + LLM provider management.
+ * App-level and per-agent credential + LLM provider management.
  *
  * Credential resolution order (highest → lowest priority):
- *   1. Site-level override (stored encrypted in SiteConfig.credentials)
+ *   1. Agent-level override (stored encrypted in AgentConfig.credentials)
  *   2. Global app config     (stored encrypted in appConfig collection)
  *   3. Environment variable fallback
  *
  * LLM provider resolution order:
- *   1. Site-level llmProviderId
+ *   1. Agent-level llmProviderId
  *   2. Global app config defaultLlmProviderId
  */
 
 import { cbGet, cbUpsert } from './couchbase';
 import { encrypt, decrypt, isEncrypted } from './crypto';
-import { getSiteConfig } from './db';
+import { getAgentConfig } from './db';
 import type { AppConfig, AlgoliaAppConfig, CredentialFields, LLMProviderConfig } from '@/types';
 
 const CONFIG_KEY = '_config';
@@ -214,34 +214,34 @@ export interface ResolvedLLMProvider {
 }
 
 /**
- * Returns fully resolved, decrypted Algolia credentials for a given site
- * (or global if no siteId is given).
+ * Returns fully resolved, decrypted Algolia credentials for a given agent
+ * (or global if no agentId is given).
  *
  * Resolution order (highest → lowest priority):
- *   1. Site algoliaAppConfigId → named AlgoliaAppConfig
+ *   1. Agent algoliaAppConfigId → named AlgoliaAppConfig
  *   2. App-level defaultAlgoliaAppId → named AlgoliaAppConfig
- *   3. Legacy: per-site credentials override
+ *   3. Legacy: per-agent credentials override
  *   4. Legacy: global AppConfig algoliaAppId / algoliaSearchApiKey
  *   5. Environment variable fallback
  */
 export async function resolveCredentials(
-  siteId?: string
+  agentId?: string
 ): Promise<ResolvedCredentials> {
   const raw = await getRawAppConfig();
   const app: CredentialFields = raw ? decryptFields(raw) : {};
 
-  let siteFields: CredentialFields = {};
-  let siteAlgoliaAppConfigId: string | undefined;
-  if (siteId) {
-    const cfg = await getSiteConfig(siteId);
+  let agentFields: CredentialFields = {};
+  let agentAlgoliaAppConfigId: string | undefined;
+  if (agentId) {
+    const cfg = await getAgentConfig(agentId);
     if (cfg?.credentials) {
-      siteFields = decryptFields(cfg.credentials);
+      agentFields = decryptFields(cfg.credentials);
     }
-    siteAlgoliaAppConfigId = cfg?.algoliaAppConfigId;
+    agentAlgoliaAppConfigId = cfg?.algoliaAppConfigId;
   }
 
   // Resolve via named algoliaApps list (new system)
-  const resolvedAppConfigId = siteAlgoliaAppConfigId ?? raw?.defaultAlgoliaAppId;
+  const resolvedAppConfigId = agentAlgoliaAppConfigId ?? raw?.defaultAlgoliaAppId;
   if (resolvedAppConfigId && raw?.algoliaApps?.length) {
     const decryptedApps = decryptAlgoliaApps(raw.algoliaApps);
     const algoliaApp = decryptedApps.find((a) => a.id === resolvedAppConfigId);
@@ -253,9 +253,9 @@ export async function resolveCredentials(
     }
   }
 
-  // Fall back to legacy per-site and global credential fields + env vars
+  // Fall back to legacy per-agent and global credential fields + env vars
   function pick(key: keyof CredentialFields, envVal: string | undefined): string {
-    return siteFields[key] || app[key] || envVal || '';
+    return agentFields[key] || app[key] || envVal || '';
   }
 
   return {
@@ -265,15 +265,15 @@ export async function resolveCredentials(
 }
 
 /**
- * Resolves the LLM provider and model for a given site.
+ * Resolves the LLM provider and model for a given agent.
  * Resolution order:
- *   1. directProviderId (explicit override — bypasses site lookup)
- *   2. Site llmProviderId
+ *   1. directProviderId (explicit override — bypasses agent lookup)
+ *   2. Agent llmProviderId
  *   3. App-level defaultLlmProviderId
  * Model always comes from the resolved provider's defaultModel.
  */
 export async function resolveLLMProvider(
-  siteId?: string,
+  agentId?: string,
   directProviderId?: string
 ): Promise<ResolvedLLMProvider | null> {
   const raw = await getRawAppConfig();
@@ -281,13 +281,13 @@ export async function resolveLLMProvider(
 
   const providers = raw.llmProviders ? decryptProviders(raw.llmProviders) : [];
 
-  let siteProviderId: string | undefined;
-  if (!directProviderId && siteId) {
-    const cfg = await getSiteConfig(siteId);
-    siteProviderId = cfg?.llmProviderId;
+  let agentProviderId: string | undefined;
+  if (!directProviderId && agentId) {
+    const cfg = await getAgentConfig(agentId);
+    agentProviderId = cfg?.llmProviderId;
   }
 
-  const resolvedProviderId = directProviderId || siteProviderId || raw.defaultLlmProviderId;
+  const resolvedProviderId = directProviderId || agentProviderId || raw.defaultLlmProviderId;
 
   if (resolvedProviderId) {
     const provider = providers.find((p) => p.id === resolvedProviderId);
@@ -339,19 +339,19 @@ export interface AppConfigStatus {
 }
 
 export async function getCredentialStatus(
-  siteId?: string
+  agentId?: string
 ): Promise<CredentialStatus> {
   const raw = await getRawAppConfig();
   const app: CredentialFields = raw ? decryptFields(raw) : {};
 
-  let siteFields: CredentialFields = {};
-  if (siteId) {
-    const cfg = await getSiteConfig(siteId);
-    if (cfg?.credentials) siteFields = decryptFields(cfg.credentials);
+  let agentFields: CredentialFields = {};
+  if (agentId) {
+    const cfg = await getAgentConfig(agentId);
+    if (cfg?.credentials) agentFields = decryptFields(cfg.credentials);
   }
 
   function sourceFor(key: keyof CredentialFields): FieldSource {
-    if (siteFields[key]) return 'db';
+    if (agentFields[key]) return 'db';
     if (app[key]) return 'db';
     const envKeys: Record<string, string | undefined> = {
       algoliaAppId:        process.env.NEXT_PUBLIC_ALGOLIA_APP_ID,
@@ -361,8 +361,8 @@ export async function getCredentialStatus(
   }
 
   return {
-    algoliaAppId:        { value: siteFields.algoliaAppId || app.algoliaAppId || process.env.NEXT_PUBLIC_ALGOLIA_APP_ID || '', source: sourceFor('algoliaAppId') },
-    algoliaSearchApiKey: { isSet: !!(siteFields.algoliaSearchApiKey || app.algoliaSearchApiKey || process.env.NEXT_PUBLIC_ALGOLIA_SEARCH_API_KEY), source: sourceFor('algoliaSearchApiKey') },
+    algoliaAppId:        { value: agentFields.algoliaAppId || app.algoliaAppId || process.env.NEXT_PUBLIC_ALGOLIA_APP_ID || '', source: sourceFor('algoliaAppId') },
+    algoliaSearchApiKey: { isSet: !!(agentFields.algoliaSearchApiKey || app.algoliaSearchApiKey || process.env.NEXT_PUBLIC_ALGOLIA_SEARCH_API_KEY), source: sourceFor('algoliaSearchApiKey') },
   };
 }
 
@@ -398,7 +398,7 @@ export async function getAppConfigStatus(): Promise<AppConfigStatus> {
   };
 }
 
-/** Encrypt site credentials before saving to SiteConfig. */
+/** Encrypt agent credentials before saving to AgentConfig. */
 export function encryptSiteCredentials(
   creds: CredentialFields
 ): CredentialFields {

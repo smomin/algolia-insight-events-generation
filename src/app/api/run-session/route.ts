@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runPersonaSession } from '@/lib/scheduler';
 import { getRemainingBudget } from '@/lib/db';
-import { getSite, getPersonas } from '@/lib/sites';
+import { getAgent, getPersonas } from '@/lib/agentConfigs';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const personaId = body.personaId as string | undefined;
-    const siteId = (body.siteId as string | undefined) ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const agentId = (body.agentId as string | undefined) ?? (body.siteId as string | undefined) ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
 
-    const site = await getSite(siteId);
-    if (!site) {
+    const agent = await getAgent(agentId);
+    if (!agent) {
       return NextResponse.json(
-        { error: `Site "${siteId}" not found` },
+        { error: `Agent "${agentId}" not found` },
         { status: 404 }
       );
     }
 
-    const personas = await getPersonas(site);
+    const personas = await getPersonas(agent);
     const persona = personaId
       ? personas.find((p) => p.id === personaId)
       : personas[Math.floor(Math.random() * personas.length)];
@@ -28,26 +28,26 @@ export async function POST(req: NextRequest) {
 
     // Check budget across all configured indices
     const budgetChecks = await Promise.all(
-      site.indices
+      agent.indices
         .filter((idx) => idx.events.length > 0)
         .map(async (idx) => {
-          const remaining = await getRemainingBudget(siteId, idx.id);
+          const remaining = await getRemainingBudget(agentId, idx.id);
           return remaining < idx.events.length;
         })
     );
 
     if (budgetChecks.some(Boolean)) {
       return NextResponse.json(
-        { error: 'Daily event budget exhausted for this site.' },
+        { error: 'Daily event budget exhausted for this agent.' },
         { status: 429 }
       );
     }
 
-    const result = await runPersonaSession(persona, site);
+    const result = await runPersonaSession(persona, agent);
 
     return NextResponse.json({
       persona: { id: persona.id, name: persona.name },
-      siteId,
+      agentId,
       ...result,
     });
   } catch (err) {

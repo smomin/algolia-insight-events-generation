@@ -41,14 +41,14 @@ export interface LLMCallOptions {
  *
  * @param messages   Conversation messages (user/assistant turns).
  * @param options    System prompt, max tokens, optional model override.
- * @param siteId Optional site id for per-site provider resolution.
+ * @param agentId Optional agent id for per-agent provider resolution.
  */
 export async function callLLM(
   messages: LLMMessage[],
   options: LLMCallOptions = {},
-  siteId?: string
+  agentId?: string
 ): Promise<string> {
-  const resolved = await resolveLLMProvider(siteId, options.providerIdOverride);
+  const resolved = await resolveLLMProvider(agentId, options.providerIdOverride);
 
   if (!resolved) {
     throw new Error(
@@ -65,7 +65,7 @@ export async function callLLM(
 
   log.debug('call start', {
     provider: providerTag,
-    siteId,
+    agentId,
     maxTokens: options.maxTokens ?? 1024,
     hasSystemPrompt: !!options.systemPrompt,
     messageCount: messages.length,

@@ -1,38 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { distributeSessionsForDay } from '@/lib/scheduler';
-import { getSite, getPersonas, getAllSites } from '@/lib/sites';
+import { getAgent, getPersonas, getAllAgents } from '@/lib/agentConfigs';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const siteId = body.siteId as string | undefined;
+    const agentId = (body.agentId as string | undefined) ?? (body.siteId as string | undefined);
 
-    if (siteId) {
-      const site = await getSite(siteId);
-      if (!site) {
+    if (agentId) {
+      const agent = await getAgent(agentId);
+      if (!agent) {
         return NextResponse.json(
-          { error: `Site "${siteId}" not found` },
+          { error: `Agent "${agentId}" not found` },
           { status: 404 }
         );
       }
-      const personas = await getPersonas(site);
-      distributeSessionsForDay(personas, site).catch(console.error);
+      const personas = await getPersonas(agent);
+      distributeSessionsForDay(personas, agent).catch(console.error);
       return NextResponse.json({
-        message: `Distribution triggered for ${site.name}.`,
-        siteId,
+        message: `Distribution triggered for ${agent.name}.`,
+        agentId,
         personaCount: personas.length,
       });
     }
 
-    const sites = await getAllSites();
-    sites.forEach(async (site) => {
-      const personas = await getPersonas(site);
-      distributeSessionsForDay(personas, site).catch(console.error);
+    const agents = await getAllAgents();
+    agents.forEach(async (agent) => {
+      const personas = await getPersonas(agent);
+      distributeSessionsForDay(personas, agent).catch(console.error);
     });
 
     return NextResponse.json({
-      message: `Distribution triggered for all ${sites.length} sites simultaneously.`,
-      sites: sites.map((s) => ({ id: s.id, name: s.name })),
+      message: `Distribution triggered for all ${agents.length} agents simultaneously.`,
+      agents: agents.map((a) => ({ id: a.id, name: a.name })),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

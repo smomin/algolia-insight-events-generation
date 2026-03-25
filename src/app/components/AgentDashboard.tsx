@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { AgentState, AgentSystemStatus, SupervisorDecision, GuardrailResult, SiteConfig, AgentConfigs } from '@/types';
+import type { AgentState, AgentSystemStatus, SupervisorDecision, GuardrailResult, AgentConfig, AgentConfigs, Persona, SentEvent, SessionRecord } from '@/types';
 import { useSSE } from '../hooks/useSSE';
 import AgentStatusCard from './AgentStatusCard';
 import SupervisorLog from './SupervisorLog';
 import GuardrailLog from './GuardrailLog';
+import PersonaSelector from './PersonaSelector';
+import SessionHistory from './SessionHistory';
+import EventLog from './EventLog';
 
 interface AlgoliaAppStatus {
   id: string;
@@ -36,11 +39,13 @@ interface AppStatus {
 }
 
 interface Props {
-  sites: Array<SiteConfig & { personaCount: number }>;
+  sites: Array<AgentConfig & { personaCount: number }>;
   eventLimit: number;
   appStatus: AppStatus | null;
   onOpenSettings: () => void;
-  onEditSite: (siteId: string) => void;
+  onCreateSite: () => void;
+  onEditSite: (agentId: string) => void;
+  onDeleteSite: (agentId: string) => void;
 }
 
 interface SupervisorStatusPayload {
@@ -50,7 +55,7 @@ interface SupervisorStatusPayload {
   type?: string;
 }
 
-export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSettings, onEditSite }: Props) {
+export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSettings, onCreateSite, onEditSite, onDeleteSite }: Props) {
   const [isActive, setIsActive] = useState(false);
   const [startedAt, setStartedAt] = useState<string | undefined>();
   const [supervisorStatus, setSupervisorStatus] = useState<{
@@ -74,6 +79,27 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [configSaveError, setConfigSaveError] = useState<string | null>(null);
 
+  // Personas per site
+  const [personasBySite, setPersonasBySite] = useState<Record<string, Persona[]>>({});
+  const [personasLoading, setPersonasLoading] = useState<Record<string, boolean>>({});
+
+  // Sessions and events per site — populated via the shared per-agent SSE connection
+  const [sessionsBySite, setSessionsBySite] = useState<Record<string, SessionRecord[]>>({});
+  const [eventsBySite, setEventsBySite] = useState<Record<string, SentEvent[]>>({});
+  const [sseLastUpdated, setSseLastUpdated] = useState<Record<string, Date>>({});
+
+  // In-flight guard — prevents duplicate concurrent fetches for the same agentId
+  const personasLoadingRef = useRef(new Set<string>());
+  // Mirror of personasBySite state — kept in sync below so the stable loadPersonas
+  // callback can read the current value without capturing stale closures.
+  // Using this as the "already loaded" guard (instead of a bare Set ref) means the
+  // guard resets correctly after a Fast Refresh hot-reload, which resets state but
+  // leaves bare refs intact.
+  const personasBySiteRef = useRef<Record<string, Persona[]>>({});
+
+  // Keep the ref in sync with the state so loadPersonas can read current values
+  personasBySiteRef.current = personasBySite;
+
   const decisionsSeen = useRef(new Set<string>());
 
   // ── Load initial status ────────────────────────────────────────────
@@ -92,7 +118,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
-  // Polling fallback every 15 s — updates agent states and decisions even if SSE events are missed
+  // Polling fallback every 15 s
   useEffect(() => {
     const id = setInterval(() => { loadStatus(); }, 15_000);
     return () => clearInterval(id);
@@ -109,9 +135,118 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
 
   useEffect(() => { loadAgentConfigs(); }, [loadAgentConfigs]);
 
+  // ── Load personas for a site ────────────────────────────────────────
+  // Guard uses personasBySiteRef (mirrors state) instead of a separate Set ref
+  // so it resets correctly after a Fast Refresh hot-reload (refs survive reloads,
+  // but personasBySiteRef is overwritten from state on every render).
+  const loadPersonas = useCallback(async (agentId: string) => {
+    if (!agentId) {
+      console.warn(`[Personas] loadPersonas called with empty agentId — skipping`);
+      return;
+    }
+
+    // "Already loaded" — key exists in state mirror (resets on hot-reload unlike a bare Set ref).
+    // This is only written on a successful server response, so it's safe to skip.
+    if (agentId in personasBySiteRef.current) {
+      const cached = personasBySiteRef.current[agentId];
+      console.warn(
+        `[Personas] skipping "${agentId}" — already in state, count=${cached?.length ?? 0}` +
+        (cached?.length === 0 ? ' (agent has no personas)' : '')
+      );
+      return;
+    }
+
+    // "Fetch in flight" guard
+    if (personasLoadingRef.current.has(agentId)) {
+      console.warn(`[Personas] skipping "${agentId}" — fetch already in flight`);
+      return;
+    }
+
+    console.warn(`[Personas] → fetching /api/agent-configs/${agentId}/personas …`);
+    personasLoadingRef.current.add(agentId);
+    setPersonasLoading((prev) => ({ ...prev, [agentId]: true }));
+
+    // Abort after 15 s so a stuck fetch (e.g. due to HTTP/1.1 connection-limit congestion)
+    // doesn't permanently lock the loading guard, allowing a retry on the next tab click.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.warn(`[Personas] ✗ timeout (15 s) for "${agentId}" — aborting fetch, will retry on next tab click`);
+      controller.abort();
+    }, 15_000);
+
+    try {
+      const res = await fetch(`/api/agent-configs/${agentId}/personas`, { signal: controller.signal });
+      console.warn(`[Personas] ← response status=${res.status} ok=${res.ok} for "${agentId}"`);
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error(
+          `[Personas] ✗ fetch FAILED for "${agentId}" — HTTP ${res.status}: ${errorText}. ` +
+          `Guard NOT set — will retry on next tab activation.`
+        );
+        return;
+      }
+      const data = await res.json();
+      const count = data?.personas?.length ?? 0;
+      if (count === 0) {
+        console.warn(`[Personas] ✓ loaded 0 personas for "${agentId}" — no personas exist yet. Full response:`, data);
+      } else {
+        console.warn(`[Personas] ✓ loaded ${count} personas for "${agentId}"`);
+      }
+      // Only write to state (and therefore the guard) after a successful response.
+      setPersonasBySite((prev) => ({ ...prev, [agentId]: data?.personas ?? [] }));
+    } catch (err) {
+      // Network error or AbortError (timeout) — guard NOT set so retry is possible.
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        console.warn(`[Personas] ✗ fetch aborted (timeout) for "${agentId}" — guard cleared, click tab to retry`);
+      } else {
+        console.error(`[Personas] ✗ network error for "${agentId}" (server may be restarting):`, err);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      personasLoadingRef.current.delete(agentId);
+      setPersonasLoading((prev) => ({ ...prev, [agentId]: false }));
+    }
+  }, []); // stable — reads guards from refs/personasBySiteRef, writes via functional setState
+
+  // Preload personas for all agents on mount so they're ready before any tab is clicked.
+  // This also handles the Fast Refresh case where activeTab state is preserved but
+  // personasBySite state is reset — the mount effect re-fetches everything.
+  const siteIdsRef = useRef<string[]>([]);
+  siteIdsRef.current = sites.map((s) => s.id);
+
+  useEffect(() => {
+    const ids = siteIdsRef.current;
+    console.warn(`[Personas] mount — preloading for ${ids.length} agent(s): [${ids.join(', ')}]`);
+    if (ids.length === 0) {
+      console.warn(`[Personas] mount — sites list is empty, nothing to preload (agents not loaded yet?)`);
+    }
+    // Stagger by 200 ms per agent to avoid saturating the 6-connection HTTP/1.1 limit
+    // while SSE connections are being established (6 SSE + 5 simultaneous REST = 11 requests).
+    ids.forEach((id, i) => setTimeout(() => loadPersonas(id), i * 200));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // mount only — siteIdsRef always has the latest value
+
+  // Also trigger when the agent list changes (e.g. a new agent is created)
+  // and when the user switches to a tab that isn't loaded yet.
+  useEffect(() => {
+    const unloaded = sites.map((s) => s.id).filter((id) => !(id in personasBySiteRef.current));
+    if (unloaded.length > 0) {
+      console.warn(`[Personas] sites changed — loading missing agents: [${unloaded.join(', ')}]`);
+      unloaded.forEach((id, i) => setTimeout(() => loadPersonas(id), i * 200));
+    }
+  }, [sites, loadPersonas]);
+
+  // Keep the tab-switch trigger as a fast-path for the active tab.
+  useEffect(() => {
+    if (activeTab !== 'overview') {
+      console.warn(`[Personas] tab activated: "${activeTab}" — triggering loadPersonas`);
+      loadPersonas(activeTab);
+    }
+  }, [activeTab, loadPersonas]);
+
   const handleEditAgent = (agentKey: keyof AgentConfigs) => {
     if (!agentConfigs) return;
-    setEditDraft(agentConfigs[agentKey].systemPrompt);
+    setEditDraft(agentConfigs[agentKey]?.systemPrompt ?? '');
     setEditingAgent(agentKey);
     setConfigSaveError(null);
   };
@@ -145,7 +280,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
   useEffect(() => {
     sites.forEach(async (site) => {
       try {
-        const res = await fetch(`/api/agents/guardrails?siteId=${site.id}`);
+        const res = await fetch(`/api/agents/guardrails?agentId=${site.id}`);
         if (!res.ok) return;
         const data = await res.json();
         setGuardrailsBySite((prev) => ({ ...prev, [site.id]: data.violations ?? [] }));
@@ -153,51 +288,41 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     });
   }, [sites]);
 
-  // ── SSE: per-site agent-status + guardrail events ─────────────
-  // Fixed-slot hooks (up to 6 sites) — hooks must be called unconditionally;
-  // null URLs prevent the connection from being opened.
+  // ── SSE: per-site agent-status + guardrail + session + event-log ──────────
+  // All four types share one connection per agent so we stay within the
+  // browser HTTP/1.1 limit of 6 persistent connections per origin.
+  // (5 agents × 1 connection + 1 supervisor = 6 total)
   const siteIds = sites.map((s) => s.id);
+  const PER_AGENT_TYPES = ['agent-status', 'guardrail', 'session', 'event-log'] as const;
 
   useSSE(
-    siteIds.length > 0
-      ? `/api/stream?siteId=${siteIds[0]}&types=agent-status,guardrail`
-      : null,
-    ['agent-status', 'guardrail'],
+    siteIds.length > 0 ? `/api/stream?siteId=${siteIds[0]}&types=agent-status,guardrail,session,event-log` : null,
+    PER_AGENT_TYPES,
     (type, data) => handleSiteEvent(siteIds[0], type, data)
   );
   useSSE(
-    siteIds.length > 1
-      ? `/api/stream?siteId=${siteIds[1]}&types=agent-status,guardrail`
-      : null,
-    ['agent-status', 'guardrail'],
+    siteIds.length > 1 ? `/api/stream?siteId=${siteIds[1]}&types=agent-status,guardrail,session,event-log` : null,
+    PER_AGENT_TYPES,
     (type, data) => handleSiteEvent(siteIds[1], type, data)
   );
   useSSE(
-    siteIds.length > 2
-      ? `/api/stream?siteId=${siteIds[2]}&types=agent-status,guardrail`
-      : null,
-    ['agent-status', 'guardrail'],
+    siteIds.length > 2 ? `/api/stream?siteId=${siteIds[2]}&types=agent-status,guardrail,session,event-log` : null,
+    PER_AGENT_TYPES,
     (type, data) => handleSiteEvent(siteIds[2], type, data)
   );
   useSSE(
-    siteIds.length > 3
-      ? `/api/stream?siteId=${siteIds[3]}&types=agent-status,guardrail`
-      : null,
-    ['agent-status', 'guardrail'],
+    siteIds.length > 3 ? `/api/stream?siteId=${siteIds[3]}&types=agent-status,guardrail,session,event-log` : null,
+    PER_AGENT_TYPES,
     (type, data) => handleSiteEvent(siteIds[3], type, data)
   );
   useSSE(
-    siteIds.length > 4
-      ? `/api/stream?siteId=${siteIds[4]}&types=agent-status,guardrail`
-      : null,
-    ['agent-status', 'guardrail'],
+    siteIds.length > 4 ? `/api/stream?siteId=${siteIds[4]}&types=agent-status,guardrail,session,event-log` : null,
+    PER_AGENT_TYPES,
     (type, data) => handleSiteEvent(siteIds[4], type, data)
   );
   useSSE(
-    siteIds.length > 5
-      ? `/api/stream?siteId=${siteIds[5]}&types=agent-status,guardrail`
-      : null,
-    ['agent-status', 'guardrail'],
+    siteIds.length > 5 ? `/api/stream?siteId=${siteIds[5]}&types=agent-status,guardrail,session,event-log` : null,
+    PER_AGENT_TYPES,
     (type, data) => handleSiteEvent(siteIds[5], type, data)
   );
 
@@ -207,7 +332,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     ['supervisor'],
     (_, data) => {
       const payload = data as SupervisorDecision & SupervisorStatusPayload;
-
       if (payload.type === 'started') {
         setSupervisorStatus((prev) => ({ ...prev, isRunning: true, startedAt: payload.startedAt }));
         setIsActive(true);
@@ -226,8 +350,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
         });
         return;
       }
-
-      // Regular decision
       if (payload.id && !decisionsSeen.current.has(payload.id)) {
         decisionsSeen.current.add(payload.id);
         setSupervisorDecisions((prev) => [payload as SupervisorDecision, ...prev].slice(0, 50));
@@ -249,6 +371,28 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
         setGuardrailsBySite((prev) => ({
           ...prev,
           [siteId]: [payload as GuardrailResult, ...(prev[siteId] ?? [])].slice(0, 100),
+        }));
+      }
+    } else if (type === 'session') {
+      const payload = data as { session?: SessionRecord; sessions?: SessionRecord[]; initial?: boolean; cleared?: boolean };
+      setSseLastUpdated((prev) => ({ ...prev, [siteId]: new Date() }));
+      if (payload.initial || payload.cleared) {
+        setSessionsBySite((prev) => ({ ...prev, [siteId]: payload.sessions ?? [] }));
+      } else if (payload.session) {
+        setSessionsBySite((prev) => ({
+          ...prev,
+          [siteId]: [payload.session!, ...(prev[siteId] ?? [])].slice(0, 200),
+        }));
+      }
+    } else if (type === 'event-log') {
+      const payload = data as { events: SentEvent[]; initial?: boolean; cleared?: boolean };
+      setSseLastUpdated((prev) => ({ ...prev, [siteId]: new Date() }));
+      if (payload.initial || payload.cleared) {
+        setEventsBySite((prev) => ({ ...prev, [siteId]: payload.events ?? [] }));
+      } else {
+        setEventsBySite((prev) => ({
+          ...prev,
+          [siteId]: [...(payload.events ?? []).slice().reverse(), ...(prev[siteId] ?? [])].slice(0, 500),
         }));
       }
     }
@@ -289,7 +433,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     setIsRunningNow(true);
     try {
       await fetch('/api/agents/tick', { method: 'POST' });
-      // Short delay then refresh status
       await new Promise((r) => setTimeout(r, 1500));
       await loadStatus();
     } finally {
@@ -297,24 +440,48 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     }
   };
 
-  // ── Resolved Algolia app + LLM provider ───────────────────────────
-  // Primary: named algoliaApps list (new multi-app system).
-  // Fallback: legacy credentials field (env-var or db single-credential).
-  const resolvedAlgoliaApp: (AlgoliaAppStatus & { isLegacy?: boolean }) | null = appStatus
-    ? (appStatus.algoliaApps.find((a) => a.id === appStatus.defaultAlgoliaAppId)
-        ?? appStatus.algoliaApps[0]
-        ?? (appStatus.credentials?.algoliaAppId?.value
-            ? {
-                id: 'legacy',
-                name: appStatus.credentials.algoliaAppId.source === 'env' ? 'Env var' : 'Legacy credential',
-                appId: appStatus.credentials.algoliaAppId.value,
-                hasSearchApiKey: appStatus.credentials.algoliaSearchApiKey.isSet,
-                isLegacy: true,
-              }
-            : null))
-    : null;
+  // ── Per-site Algolia / LLM resolution ─────────────────────────────
+  const resolveAlgoliaApp = (site: AgentConfig): (AlgoliaAppStatus & { isLegacy?: boolean }) | null => {
+    if (!appStatus) return null;
+    return (
+      appStatus.algoliaApps.find((a) => a.id === (site.algoliaAppConfigId ?? appStatus.defaultAlgoliaAppId)) ??
+      appStatus.algoliaApps[0] ??
+      (appStatus.credentials?.algoliaAppId?.value
+        ? {
+            id: 'legacy',
+            name: appStatus.credentials.algoliaAppId.source === 'env' ? 'Env var' : 'Legacy credential',
+            appId: appStatus.credentials.algoliaAppId.value,
+            hasSearchApiKey: appStatus.credentials.algoliaSearchApiKey.isSet,
+            isLegacy: true,
+          }
+        : null)
+    );
+  };
 
-  const resolvedLLM = appStatus
+  const resolveLLM = (site: AgentConfig): LLMProviderStatus | null => {
+    if (!appStatus) return null;
+    return (
+      appStatus.llmProviders.find((p) => p.id === (site.llmProviderId ?? appStatus.defaultLlmProviderId)) ??
+      appStatus.llmProviders[0] ??
+      null
+    );
+  };
+
+  // Global defaults (for control panel banner)
+  const defaultAlgoliaApp: (AlgoliaAppStatus & { isLegacy?: boolean }) | null = appStatus
+    ? (appStatus.algoliaApps.find((a) => a.id === appStatus.defaultAlgoliaAppId) ??
+        appStatus.algoliaApps[0] ??
+        (appStatus.credentials?.algoliaAppId?.value
+          ? {
+              id: 'legacy',
+              name: appStatus.credentials.algoliaAppId.source === 'env' ? 'Env var' : 'Legacy credential',
+              appId: appStatus.credentials.algoliaAppId.value,
+              hasSearchApiKey: appStatus.credentials.algoliaSearchApiKey.isSet,
+              isLegacy: true,
+            }
+          : null))
+    : null;
+  const defaultLLM = appStatus
     ? appStatus.llmProviders.find((p) => p.id === appStatus.defaultLlmProviderId) ?? appStatus.llmProviders[0] ?? null
     : null;
 
@@ -350,7 +517,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
             {/* Stats when active */}
             {isActive && (
               <div className="hidden sm:flex items-center gap-4 text-xs text-slate-400 bg-slate-800 border border-slate-700 rounded-lg px-4 py-2">
@@ -367,6 +534,17 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                 </span>
               </div>
             )}
+
+            {/* New Agent button */}
+            <button
+              onClick={onCreateSite}
+              className="px-3 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg font-medium transition-colors flex items-center gap-1.5 border border-slate-600 hover:border-slate-500"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+              </svg>
+              New Agent
+            </button>
 
             {isActive && (
               <button
@@ -448,33 +626,9 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
         {/* Agent system prompt cards */}
         <div className="mt-4 pt-4 border-t border-slate-700/50 grid grid-cols-1 sm:grid-cols-3 gap-3">
           {([
-            {
-              key: 'supervisor' as const,
-              accent: 'text-violet-400',
-              border: 'border-violet-800/40',
-              bg: 'bg-violet-900/10',
-              num: '①',
-              label: 'Supervisor Agent',
-              badge: 'bg-violet-900/40 text-violet-300 border-violet-800',
-            },
-            {
-              key: 'siteAgent' as const,
-              accent: 'text-blue-400',
-              border: 'border-blue-800/40',
-              bg: 'bg-blue-900/10',
-              num: '②',
-              label: 'Site Agent',
-              badge: 'bg-blue-900/40 text-blue-300 border-blue-800',
-            },
-            {
-              key: 'guardrails' as const,
-              accent: 'text-amber-400',
-              border: 'border-amber-800/40',
-              bg: 'bg-amber-900/10',
-              num: '③',
-              label: 'Guardrails Agent',
-              badge: 'bg-amber-900/40 text-amber-300 border-amber-800',
-            },
+            { key: 'supervisor' as const, accent: 'text-violet-400', border: 'border-violet-800/40', bg: 'bg-violet-900/10', num: '①', label: 'Supervisor Agent', badge: 'bg-violet-900/40 text-violet-300 border-violet-800' },
+            { key: 'workerAgent' as const, accent: 'text-blue-400', border: 'border-blue-800/40', bg: 'bg-blue-900/10', num: '②', label: 'Worker Agent', badge: 'bg-blue-900/40 text-blue-300 border-blue-800' },
+            { key: 'guardrails' as const, accent: 'text-amber-400', border: 'border-amber-800/40', bg: 'bg-amber-900/10', num: '③', label: 'Guardrails Agent', badge: 'bg-amber-900/40 text-amber-300 border-amber-800' },
           ] as const).map(({ key, accent, border, bg, num, label, badge }) => (
             <div key={key} className={`rounded-lg border ${border} ${bg} p-3 flex flex-col gap-2`}>
               <div className="flex items-center justify-between gap-2">
@@ -509,28 +663,21 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
         <div className="mt-3 pt-3 border-t border-slate-700/50 flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             {appStatus === null ? (
-              /* Loading skeleton */
-              <>
-                <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700/50 text-slate-600 px-2 py-0.5 rounded-full animate-pulse">
-                  Loading…
-                </span>
-              </>
+              <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700/50 text-slate-600 px-2 py-0.5 rounded-full animate-pulse">
+                Loading…
+              </span>
             ) : (
               <>
-                {resolvedAlgoliaApp ? (
+                {defaultAlgoliaApp ? (
                   <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
                     <svg className="w-2.5 h-2.5 text-blue-400 shrink-0" viewBox="0 0 24 24" fill="currentColor">
                       <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/>
                     </svg>
-                    <span className="text-blue-300 font-medium">{resolvedAlgoliaApp.name}</span>
+                    <span className="text-blue-300 font-medium">{defaultAlgoliaApp.name}</span>
                     <span className="text-slate-600">·</span>
-                    <span className="font-mono text-slate-500">{resolvedAlgoliaApp.appId}</span>
-                    {resolvedAlgoliaApp.isLegacy && (
-                      <span className="ml-0.5 text-slate-600 italic">env</span>
-                    )}
-                    {!resolvedAlgoliaApp.hasSearchApiKey && (
-                      <span className="ml-0.5 text-rose-400 italic">no key</span>
-                    )}
+                    <span className="font-mono text-slate-500">{defaultAlgoliaApp.appId}</span>
+                    {defaultAlgoliaApp.isLegacy && <span className="ml-0.5 text-slate-600 italic">env</span>}
+                    {!defaultAlgoliaApp.hasSearchApiKey && <span className="ml-0.5 text-rose-400 italic">no key</span>}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-[10px] bg-rose-900/20 border border-rose-800/50 text-rose-400 px-2 py-0.5 rounded-full">
@@ -541,17 +688,15 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                   </span>
                 )}
 
-                {resolvedLLM ? (
+                {defaultLLM ? (
                   <span className="inline-flex items-center gap-1 text-[10px] bg-slate-800 border border-slate-700 text-slate-400 px-2 py-0.5 rounded-full">
                     <svg className="w-2.5 h-2.5 text-violet-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
                     </svg>
-                    <span className="text-violet-300 font-medium">{resolvedLLM.name}</span>
+                    <span className="text-violet-300 font-medium">{defaultLLM.name}</span>
                     <span className="text-slate-600">·</span>
-                    <span className="font-mono text-slate-500">{resolvedLLM.defaultModel}</span>
-                    {!resolvedLLM.hasApiKey && (
-                      <span className="ml-0.5 text-rose-400 italic">no key</span>
-                    )}
+                    <span className="font-mono text-slate-500">{defaultLLM.defaultModel}</span>
+                    {!defaultLLM.hasApiKey && <span className="ml-0.5 text-rose-400 italic">no key</span>}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-[10px] bg-rose-900/20 border border-rose-800/50 text-rose-400 px-2 py-0.5 rounded-full">
@@ -565,20 +710,17 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
             )}
           </div>
 
-          {onOpenSettings && (
-
-            <button
-              onClick={onOpenSettings}
-              className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-500 px-2.5 py-1 rounded-lg transition-colors"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-              App Settings
-            </button>
-          )}
+          <button
+            onClick={onOpenSettings}
+            className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-500 px-2.5 py-1 rounded-lg transition-colors"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+            App Settings
+          </button>
         </div>
       </div>
 
@@ -626,7 +768,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
       {activeTab === 'overview' && (
         <>
           {/* Warning when no site has personas */}
-          {sites.every((s) => s.personaCount === 0) && (
+          {sites.length > 0 && sites.every((s) => s.personaCount === 0) && (
             <div className="flex items-start gap-3 bg-amber-900/20 border border-amber-800/50 rounded-xl px-4 py-3">
               <svg className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -635,42 +777,72 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               <div>
                 <p className="text-sm text-amber-300 font-medium">No personas configured</p>
                 <p className="text-xs text-amber-400/70 mt-0.5">
-                  The supervisor needs personas to run sessions. Switch to the <strong>Sites</strong> tab, select a site, and use the <strong>Generate Personas</strong> button.
+                  Click on an agent tab above to view and generate personas for that agent.
                 </p>
               </div>
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sites.map((site) => {
-              const agentState = agentStates[site.id] ?? {
-                siteId: site.id,
-                phase: 'idle' as const,
-                sessionsCompleted: 0,
-                sessionsTarget: 0,
-                eventsSentToday: 0,
-                dailyTarget: eventLimit * Math.max(1, site.indices.filter((i) => i.events.length > 0).length),
-                guardrailViolations: 0,
-                lastActivity: new Date().toISOString(),
-                errors: [],
-                isActive: false,
-              };
-              const dailyTarget =
-                eventLimit * Math.max(1, site.indices.filter((i) => i.events.length > 0).length);
-              return (
-                <AgentStatusCard
-                  key={site.id}
-                  siteName={site.name}
-                  siteIcon={site.icon}
-                  siteColor={site.color}
-                  state={agentState}
-                  dailyTarget={dailyTarget}
-                  personaCount={site.personaCount}
-                  onEdit={() => onEditSite(site.id)}
-                />
-              );
-            })}
-          </div>
+          {sites.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-4">
+              <div className="w-16 h-16 bg-slate-800 border border-slate-700 rounded-2xl flex items-center justify-center">
+                <svg className="w-8 h-8 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+              </div>
+              <div className="text-center">
+                <p className="text-slate-300 font-medium">No agents yet</p>
+                <p className="text-slate-500 text-sm mt-1">Create your first agent to start generating events</p>
+              </div>
+              <button
+                onClick={onCreateSite}
+                className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-700 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                </svg>
+                Create First Agent
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {sites.map((site) => {
+                const agentState = agentStates[site.id] ?? {
+                  siteId: site.id,
+                  phase: 'idle' as const,
+                  sessionsCompleted: 0,
+                  sessionsTarget: 0,
+                  eventsSentToday: 0,
+                  dailyTarget: eventLimit * Math.max(1, site.indices.filter((i) => i.events.length > 0).length),
+                  guardrailViolations: 0,
+                  lastActivity: new Date().toISOString(),
+                  errors: [],
+                  isActive: false,
+                };
+                const dailyTarget =
+                  eventLimit * Math.max(1, site.indices.filter((i) => i.events.length > 0).length);
+                const algoliaApp = resolveAlgoliaApp(site);
+                const llmProvider = resolveLLM(site);
+                return (
+                  <AgentStatusCard
+                    key={site.id}
+                    siteName={site.name}
+                    siteIcon={site.icon}
+                    siteColor={site.color}
+                    state={agentState}
+                    dailyTarget={dailyTarget}
+                    personaCount={site.personaCount}
+                    algoliaApp={algoliaApp ? { name: algoliaApp.name, appId: algoliaApp.appId, isOverride: !!site.algoliaAppConfigId } : undefined}
+                    llmProvider={llmProvider ? { name: llmProvider.name, model: llmProvider.defaultModel, isOverride: !!site.llmProviderId } : undefined}
+                    onEdit={() => onEditSite(site.id)}
+                    onDelete={!site.isBuiltIn ? () => onDeleteSite(site.id) : undefined}
+                    onViewDetails={() => setActiveTab(site.id)}
+                  />
+                );
+              })}
+            </div>
+          )}
 
           <SupervisorLog
             decisions={supervisorDecisions}
@@ -682,40 +854,141 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
 
       {/* ── Per-site detail view ────────────────────────────────── */}
       {activeTab !== 'overview' && tabSite && (
-        <div className="space-y-4">
-          {/* Agent card */}
-          {(() => {
-            const state = agentStates[tabSite.id] ?? {
-              siteId: tabSite.id,
-              phase: 'idle' as const,
-              sessionsCompleted: 0,
-              sessionsTarget: 0,
-              eventsSentToday: 0,
-              dailyTarget: eventLimit,
-              guardrailViolations: 0,
-              lastActivity: new Date().toISOString(),
-              errors: [],
-              isActive: false,
-            };
-            const dailyTarget =
-              eventLimit *
-              Math.max(1, tabSite.indices.filter((i) => i.events.length > 0).length);
-            return (
-              <AgentStatusCard
-                siteName={tabSite.name}
-                siteIcon={tabSite.icon}
-                siteColor={tabSite.color}
-                state={state}
-                dailyTarget={dailyTarget}
-                personaCount={tabSite.personaCount}
-                onEdit={() => onEditSite(tabSite.id)}
-              />
-            );
-          })()}
+        <div className="space-y-5">
+          {/* Agent status card + action buttons */}
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex-1 min-w-0">
+              {(() => {
+                const state = agentStates[tabSite.id] ?? {
+                  siteId: tabSite.id,
+                  phase: 'idle' as const,
+                  sessionsCompleted: 0,
+                  sessionsTarget: 0,
+                  eventsSentToday: 0,
+                  dailyTarget: eventLimit,
+                  guardrailViolations: 0,
+                  lastActivity: new Date().toISOString(),
+                  errors: [],
+                  isActive: false,
+                };
+                const dailyTarget =
+                  eventLimit * Math.max(1, tabSite.indices.filter((i) => i.events.length > 0).length);
+                const algoliaApp = resolveAlgoliaApp(tabSite);
+                const llmProvider = resolveLLM(tabSite);
+                return (
+                  <AgentStatusCard
+                    siteName={tabSite.name}
+                    siteIcon={tabSite.icon}
+                    siteColor={tabSite.color}
+                    state={state}
+                    dailyTarget={dailyTarget}
+                    personaCount={tabSite.personaCount}
+                    algoliaApp={algoliaApp ? { name: algoliaApp.name, appId: algoliaApp.appId, isOverride: !!tabSite.algoliaAppConfigId } : undefined}
+                    llmProvider={llmProvider ? { name: llmProvider.name, model: llmProvider.defaultModel, isOverride: !!tabSite.llmProviderId } : undefined}
+                    onEdit={() => onEditSite(tabSite.id)}
+                    onDelete={!tabSite.isBuiltIn ? () => onDeleteSite(tabSite.id) : undefined}
+                    expanded
+                  />
+                );
+              })()}
+            </div>
+          </div>
 
-          {/* Supervisor decisions for this site */}
+          {/* Index summary chips */}
+          <div className="flex flex-wrap gap-2">
+            {tabSite.indices.map((idx) => (
+              <div key={idx.id} className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5">
+                <span className={`text-[10px] font-bold uppercase tracking-wider ${idx.role === 'primary' ? 'text-blue-400' : 'text-slate-400'}`}>
+                  {idx.role}
+                </span>
+                <span className="text-xs font-medium text-slate-300">{idx.label || idx.id}</span>
+                {idx.indexName && (
+                  <code className="text-[10px] text-slate-500 font-mono bg-slate-700 px-1.5 py-0.5 rounded">{idx.indexName}</code>
+                )}
+                <span className="text-[10px] text-slate-600">{idx.events.length} events</span>
+              </div>
+            ))}
+            {tabSite.siteUrl && (
+              <a
+                href={tabSite.siteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 hover:border-blue-700 rounded-lg px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+              >
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                {tabSite.siteUrl}
+              </a>
+            )}
+          </div>
+
+          {/* Personas */}
+          {tabSite.id in personasBySite ? (
+            <PersonaSelector
+              personas={personasBySite[tabSite.id]}
+              siteId={tabSite.id}
+              siteName={tabSite.name}
+              onPersonasGenerated={(newPersonas) => {
+                setPersonasBySite((prev) => ({
+                  ...prev,
+                  [tabSite.id]: [...(prev[tabSite.id] ?? []), ...newPersonas],
+                }));
+              }}
+              onPersonaUpdated={(updated) => {
+                setPersonasBySite((prev) => ({
+                  ...prev,
+                  [tabSite.id]: (prev[tabSite.id] ?? []).map((p) =>
+                    p.id === updated.id ? updated : p
+                  ),
+                }));
+              }}
+              onPersonaDeleted={(personaId) => {
+                setPersonasBySite((prev) => ({
+                  ...prev,
+                  [tabSite.id]: (prev[tabSite.id] ?? []).filter((p) => p.id !== personaId),
+                }));
+              }}
+            />
+          ) : (
+            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-8 text-center">
+              <div className="flex items-center justify-center gap-2 mb-1">
+                {personasLoading[tabSite.id] && (
+                  <span className="w-3.5 h-3.5 border-2 border-slate-600 border-t-slate-400 rounded-full animate-spin" />
+                )}
+                <p className="text-slate-400 text-sm">
+                  {personasLoading[tabSite.id]
+                    ? `Loading personas for ${tabSite.name}…`
+                    : `No personas found for ${tabSite.name}`}
+                </p>
+              </div>
+              {!personasLoading[tabSite.id] && (
+                <p className="text-slate-600 text-xs mt-1">
+                  Personas will appear here once the agent tab finishes loading.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Session History */}
+          <SessionHistory
+            agentId={tabSite.id}
+            isActive={agentStates[tabSite.id]?.isActive ?? false}
+            sessions={sessionsBySite[tabSite.id]}
+            lastUpdated={sseLastUpdated[tabSite.id] ?? null}
+          />
+
+          {/* Event Log */}
+          <EventLog
+            agentId={tabSite.id}
+            events={eventsBySite[tabSite.id]}
+            sessions={sessionsBySite[tabSite.id]}
+            lastUpdated={sseLastUpdated[tabSite.id] ?? null}
+          />
+
+          {/* Supervisor decisions for this agent */}
           <SupervisorLog
-            decisions={supervisorDecisions.filter((d) => d.siteId === tabSite.id)}
+            decisions={supervisorDecisions.filter((d) => (d.agentId ?? d.siteId) === tabSite.id)}
             isRunning={supervisorStatus.isRunning}
             lastRunAt={supervisorStatus.lastRunAt}
           />
@@ -732,7 +1005,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
       {editingAgent && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[90vh]">
-            {/* Modal header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
               <div className="flex items-center gap-2">
                 <svg className="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -758,19 +1030,17 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               </button>
             </div>
 
-            {/* Description */}
             <div className="px-5 pt-3 pb-2">
               <p className="text-[11px] text-slate-400">
                 {editingAgent === 'supervisor' &&
-                  'This prompt defines the Supervisor Agent\'s role and decision-making behavior. It is stored and displayed for reference — the supervisor\'s pacing logic is algorithmic.'}
+                  "This prompt defines the Supervisor Agent's role and decision-making behavior. It is stored and displayed for reference — the supervisor's pacing logic is algorithmic."}
                 {editingAgent === 'guardrails' &&
                   'This system prompt is sent to the LLM on every guardrail validation call. It determines how strictly queries are evaluated against persona profiles.'}
-                {editingAgent === 'siteAgent' &&
-                  'This prompt describes the Site Agent\'s overarching behavior. It is stored as context; per-site query prompts are configured in the Sites tab.'}
+                {editingAgent === 'workerAgent' &&
+                  "This prompt describes the Worker Agent's overarching behavior. It is stored as context; per-agent query prompts are configured in the agent settings."}
               </p>
             </div>
 
-            {/* Textarea */}
             <div className="flex-1 overflow-hidden px-5 pb-3 min-h-0">
               <textarea
                 value={editDraft}
@@ -781,7 +1051,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               />
             </div>
 
-            {/* Error */}
             {configSaveError && (
               <div className="mx-5 mb-3 flex items-center gap-2 bg-rose-900/20 border border-rose-800/50 rounded-lg px-3 py-2">
                 <svg className="w-3.5 h-3.5 text-rose-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -791,7 +1060,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               </div>
             )}
 
-            {/* Footer */}
             <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-slate-700">
               <button
                 onClick={() => { setEditingAgent(null); setConfigSaveError(null); }}

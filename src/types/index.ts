@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────
-// Flexible N-index site model
+// Flexible N-index agent model
 // ─────────────────────────────────────────────
 
 export type AlgoliaEventType = 'view' | 'click' | 'conversion';
@@ -12,9 +12,9 @@ export interface IndexEvent {
   eventName: string;
 }
 
-/** A configured Algolia index belonging to a site */
+/** A configured Algolia index belonging to an agent */
 export interface FlexIndex {
-  id: string;        // slug unique within site, e.g. "recipes" or "hotels"
+  id: string;        // slug unique within agent, e.g. "recipes" or "hotels"
   label: string;     // human-readable, e.g. "Recipes"
   indexName: string; // actual Algolia index name
   role: 'primary' | 'secondary';
@@ -53,7 +53,7 @@ export interface AlgoliaAppConfig {
 // App-level configuration (stored encrypted in Couchbase)
 // ─────────────────────────────────────────────
 
-/** Credential fields shared by AppConfig and SiteCredentials. */
+/** Credential fields shared by AppConfig and AgentCredentials. */
 export interface CredentialFields {
   algoliaAppId?: string;
   algoliaSearchApiKey?: string; // stored AES-256-GCM encrypted
@@ -63,38 +63,44 @@ export interface CredentialFields {
 export interface AppConfig extends CredentialFields {
   updatedAt: string;
   llmProviders?: LLMProviderConfig[];        // all configured LLM providers
-  defaultLlmProviderId?: string;             // provider to use when no site override
+  defaultLlmProviderId?: string;             // provider to use when no agent override
   personaGenerationLlmProviderId?: string;   // provider used specifically for persona generation
   algoliaApps?: AlgoliaAppConfig[];          // all configured Algolia applications
-  defaultAlgoliaAppId?: string;             // app to use when no site override
+  defaultAlgoliaAppId?: string;             // app to use when no agent override
 }
 
-/** Per-site credential overrides — override global app config or env vars. */
-export type SiteCredentials = CredentialFields;
+/** Per-agent credential overrides — override global app config or env vars. */
+export type AgentCredentials = CredentialFields;
 
-/** Full site definition — stored in DB, editable via UI */
-export interface SiteConfig {
+/** @deprecated Use AgentCredentials */
+export type SiteCredentials = AgentCredentials;
+
+/** Full agent definition — stored in DB, editable via UI */
+export interface AgentConfig {
   id: string;
   name: string;
   icon: string;
   color: string;
-  siteUrl?: string;           // optional URL of the site being simulated
-  indices: FlexIndex[];       // first primary, then 0-N secondaries
+  siteUrl?: string;              // optional URL of the site being simulated
+  indices: FlexIndex[];          // first primary, then 0-N secondaries
   claudePrompts: {
     generatePrimaryQuery: string;
     selectBestResult: string;
     generateSecondaryQueries: string;
   };
-  credentials?: SiteCredentials; // optional per-site credential overrides
-  llmProviderId?: string;        // override app-level default LLM provider for this site
-  algoliaAppConfigId?: string;   // override app-level default Algolia app for this site
-  isBuiltIn: boolean;            // built-in sites cannot be deleted
+  credentials?: AgentCredentials; // optional per-agent credential overrides
+  llmProviderId?: string;         // override app-level default LLM provider
+  algoliaAppConfigId?: string;    // override app-level default Algolia app
+  isBuiltIn: boolean;             // built-in agents cannot be deleted
   createdAt: string;
   updatedAt: string;
 }
 
+/** @deprecated Use AgentConfig */
+export type SiteConfig = AgentConfig;
+
 // ─────────────────────────────────────────────
-// Persona — generic across all sites
+// Persona — generic across all agents
 // ─────────────────────────────────────────────
 
 export interface PersonaBase {
@@ -102,6 +108,8 @@ export interface PersonaBase {
   name: string;
   userToken: string;
   description: string;
+  agentId?: string;
+  /** @deprecated Use agentId */
   site?: string;
   skill?: 'beginner' | 'intermediate' | 'advanced';
   budget?: 'low' | 'medium' | 'high';
@@ -161,6 +169,8 @@ export interface SentEvent {
   event: InsightEvent;
   batchStatus: number;
   sentAt: number;
+  agentId?: string;
+  /** @deprecated Use agentId */
   siteId?: string;
   personaId?: string;
   personaName?: string;
@@ -191,12 +201,14 @@ export interface SessionResult {
 }
 
 // ─────────────────────────────────────────────
-// Session record — stored in DB per-site
+// Session record — stored in DB per-agent
 // ─────────────────────────────────────────────
 
 export interface SessionRecord {
   id: string;
-  siteId: string;
+  agentId: string;
+  /** @deprecated Use agentId */
+  siteId?: string;
   personaId: string;
   personaName: string;
   startedAt: string;
@@ -213,7 +225,9 @@ export interface SessionRecord {
 
 export interface SchedulerRun {
   id: string;
-  siteId: string;
+  agentId: string;
+  /** @deprecated Use agentId */
+  siteId?: string;
   startedAt: string;
   completedAt?: string;
   sessionsPlanned: number;
@@ -224,47 +238,60 @@ export interface SchedulerRun {
 }
 
 // ─────────────────────────────────────────────
-// Per-site daily counters (N-index)
+// Per-agent daily counters (N-index)
 // ─────────────────────────────────────────────
 
-export interface SiteCounters {
+export interface AgentCounters {
   date: string;
   byIndex: Record<string, number>; // FlexIndex.id → count today
 }
+
+/** @deprecated Use AgentCounters */
+export type SiteCounters = AgentCounters;
 
 // ─────────────────────────────────────────────
 // DB schema
 // ─────────────────────────────────────────────
 
-export interface SiteData {
-  counters: SiteCounters;
+export interface AgentData {
+  counters: AgentCounters;
   eventLog: SentEvent[];
   schedulerRuns: SchedulerRun[];
   sessions: SessionRecord[];
 }
 
+/** @deprecated Use AgentData */
+export type SiteData = AgentData;
+
 export interface DbSchema {
-  siteConfigs: Record<string, SiteConfig>; // all site definitions
-  sites: Record<string, SiteData>;         // per-site runtime data
+  agentConfigs: Record<string, AgentConfig>; // all agent definitions
+  agents: Record<string, AgentData>;         // per-agent runtime data
 }
 
 // ─────────────────────────────────────────────
 // Scheduler status (returned from status API)
 // ─────────────────────────────────────────────
 
-export interface SiteSchedulerStatus {
-  siteId: string;
+export interface AgentSchedulerStatus {
+  agentId: string;
+  /** @deprecated Use agentId */
+  siteId?: string;
   isRunning: boolean;
   isDistributing: boolean;
   nextRun: string | null;
-  counters: SiteCounters;
+  counters: AgentCounters;
   eventLimit: number;
   lastRun: SchedulerRun | null;
   currentRun: SchedulerRun | null;
 }
 
+/** @deprecated Use AgentSchedulerStatus */
+export type SiteSchedulerStatus = AgentSchedulerStatus;
+
 export interface AllSchedulerStatus {
-  sites: Record<string, SiteSchedulerStatus>;
+  agents: Record<string, AgentSchedulerStatus>;
+  /** @deprecated Use agents */
+  sites?: Record<string, AgentSchedulerStatus>;
 }
 
 // ─────────────────────────────────────────────
@@ -281,7 +308,9 @@ export type AgentPhase =
   | 'error';
 
 export interface AgentState {
-  siteId: string;
+  agentId: string;
+  /** @deprecated Use agentId */
+  siteId?: string;
   phase: AgentPhase;
   currentPersonaId?: string;
   currentPersonaName?: string;
@@ -300,7 +329,9 @@ export interface GuardrailResult {
   approved: boolean;
   reason: string;
   suggestedQuery?: string;
-  siteId: string;
+  agentId: string;
+  /** @deprecated Use agentId */
+  siteId?: string;
   personaId: string;
   personaName: string;
   originalQuery: string;
@@ -314,8 +345,12 @@ export type SupervisorUrgency = 'ahead' | 'normal' | 'high' | 'critical';
 export interface SupervisorDecision {
   id: string;
   timestamp: string;
-  siteId: string;
-  siteName: string;
+  agentId: string;
+  agentName: string;
+  /** @deprecated Use agentId */
+  siteId?: string;
+  /** @deprecated Use agentName */
+  siteName?: string;
   urgency: SupervisorUrgency;
   sessionsDispatched: number;
   reasoning: string;
@@ -351,5 +386,7 @@ export interface AgentPromptConfig {
 export interface AgentConfigs {
   supervisor: AgentPromptConfig;
   guardrails: AgentPromptConfig;
-  siteAgent: AgentPromptConfig;
+  workerAgent: AgentPromptConfig;
+  /** @deprecated Use workerAgent */
+  siteAgent?: AgentPromptConfig;
 }

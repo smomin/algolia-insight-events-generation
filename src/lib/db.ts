@@ -1,11 +1,11 @@
 import { cbGet, cbUpsert, cbDelete, cbGetIndex, cbAddToIndex, cbRemoveFromIndex } from '@/lib/couchbase';
-import { emitToSite } from '@/lib/sse';
+import { emitToAgent } from '@/lib/sse';
 
 // Module-level constant so the env var is parsed once at startup.
 const DAILY_LIMIT = parseInt(process.env.DAILY_EVENT_LIMIT_PER_INDEX ?? '1000', 10);
 import type {
-  SiteConfig,
-  SiteCounters,
+  AgentConfig,
+  AgentCounters,
   SentEvent,
   SchedulerRun,
   SessionRecord,
@@ -20,27 +20,34 @@ function getToday(): string {
 }
 
 // ─────────────────────────────────────────────
-// Site config CRUD
+// Agent config CRUD
+// Note: Couchbase collection key kept as 'siteConfigs' for data compatibility.
 // ─────────────────────────────────────────────
 
-export async function getAllSiteConfigs(): Promise<Record<string, SiteConfig>> {
+export async function getAllAgentConfigs(): Promise<Record<string, AgentConfig>> {
   const keys = await cbGetIndex('siteConfigs');
   const entries = await Promise.all(
     keys.map(async (id) => {
-      const cfg = await cbGet<SiteConfig>('siteConfigs', id);
+      const cfg = await cbGet<AgentConfig>('siteConfigs', id);
       return cfg ? ([id, cfg] as const) : null;
     })
   );
   return Object.fromEntries(
-    entries.filter((e): e is [string, SiteConfig] => e !== null)
+    entries.filter((e): e is [string, AgentConfig] => e !== null)
   );
 }
 
-export async function getSiteConfig(id: string): Promise<SiteConfig | null> {
-  return cbGet<SiteConfig>('siteConfigs', id);
+/** @deprecated Use getAllAgentConfigs */
+export const getAllSiteConfigs = getAllAgentConfigs;
+
+export async function getAgentConfig(id: string): Promise<AgentConfig | null> {
+  return cbGet<AgentConfig>('siteConfigs', id);
 }
 
-export async function saveSiteConfig(config: SiteConfig): Promise<void> {
+/** @deprecated Use getAgentConfig */
+export const getSiteConfig = getAgentConfig;
+
+export async function saveAgentConfig(config: AgentConfig): Promise<void> {
   await cbUpsert('siteConfigs', config.id, {
     ...config,
     updatedAt: new Date().toISOString(),
@@ -48,51 +55,57 @@ export async function saveSiteConfig(config: SiteConfig): Promise<void> {
   await cbAddToIndex('siteConfigs', config.id);
 }
 
-export async function deleteSiteConfig(id: string): Promise<void> {
+/** @deprecated Use saveAgentConfig */
+export const saveSiteConfig = saveAgentConfig;
+
+export async function deleteAgentConfig(id: string): Promise<void> {
   await cbDelete('siteConfigs', id);
   await cbRemoveFromIndex('siteConfigs', id);
 }
 
+/** @deprecated Use deleteAgentConfig */
+export const deleteSiteConfig = deleteAgentConfig;
+
 // ─────────────────────────────────────────────
-// Counters (N-index, per site)
+// Counters (N-index, per agent)
 // ─────────────────────────────────────────────
 
-async function readCounters(siteId: string): Promise<SiteCounters> {
-  const doc = await cbGet<SiteCounters>('counters', siteId);
+async function readCounters(agentId: string): Promise<AgentCounters> {
+  const doc = await cbGet<AgentCounters>('counters', agentId);
   return doc ?? { date: getToday(), byIndex: {} };
 }
 
-export async function getTodayCounters(siteId: string): Promise<SiteCounters> {
-  const counters = await readCounters(siteId);
+export async function getTodayCounters(agentId: string): Promise<AgentCounters> {
+  const counters = await readCounters(agentId);
   if (counters.date !== getToday()) {
-    const fresh: SiteCounters = { date: getToday(), byIndex: {} };
-    await cbUpsert('counters', siteId, fresh);
+    const fresh: AgentCounters = { date: getToday(), byIndex: {} };
+    await cbUpsert('counters', agentId, fresh);
     return fresh;
   }
   return counters;
 }
 
 /** Ensures counters are for today. Delegates to getTodayCounters. */
-export async function resetCountersIfNewDay(siteId: string): Promise<void> {
-  await getTodayCounters(siteId);
+export async function resetCountersIfNewDay(agentId: string): Promise<void> {
+  await getTodayCounters(agentId);
 }
 
 export async function incrementIndexCounter(
-  siteId: string,
+  agentId: string,
   indexId: string,
   amount: number
 ): Promise<void> {
-  const counters = await getTodayCounters(siteId);
+  const counters = await getTodayCounters(agentId);
   counters.byIndex[indexId] = (counters.byIndex[indexId] ?? 0) + amount;
-  await cbUpsert('counters', siteId, counters);
-  emitToSite(siteId, 'counters', counters);
+  await cbUpsert('counters', agentId, counters);
+  emitToAgent(agentId, 'counters', counters);
 }
 
 export async function getRemainingBudget(
-  siteId: string,
+  agentId: string,
   indexId: string
 ): Promise<number> {
-  const counters = await getTodayCounters(siteId);
+  const counters = await getTodayCounters(agentId);
   return Math.max(0, DAILY_LIMIT - (counters.byIndex[indexId] ?? 0));
 }
 
@@ -101,24 +114,31 @@ export async function getRemainingBudget(
 // ─────────────────────────────────────────────
 
 export async function appendEventLog(
-  siteId: string,
+  agentId: string,
   events: SentEvent[]
 ): Promise<void> {
-  const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', siteId);
+  const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', agentId);
   const existing = doc?.events ?? [];
   const updated = [...existing, ...events].slice(-MAX_EVENT_LOG);
-  await cbUpsert('eventLogs', siteId, { events: updated });
-  emitToSite(siteId, 'event-log', { events });
+  await cbUpsert('eventLogs', agentId, { events: updated });
+  emitToAgent(agentId, 'event-log', { events });
 }
 
-export async function getEventLog(siteId: string): Promise<SentEvent[]> {
-  const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', siteId);
-  return (doc?.events ?? []).slice().reverse();
+export async function getEventLog(agentId: string): Promise<SentEvent[]> {
+  console.debug(`[DB:getEventLog] querying collection=eventLogs key="${agentId}"`);
+  const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', agentId);
+  if (!doc) {
+    console.debug(`[DB:getEventLog] document not found for key="${agentId}" — returning []`);
+    return [];
+  }
+  const count = doc.events?.length ?? 0;
+  console.debug(`[DB:getEventLog] found ${count} events for key="${agentId}"`);
+  return (doc.events ?? []).slice().reverse();
 }
 
-export async function clearEventLog(siteId: string): Promise<void> {
-  await cbUpsert('eventLogs', siteId, { events: [] });
-  emitToSite(siteId, 'event-log', { events: [], cleared: true });
+export async function clearEventLog(agentId: string): Promise<void> {
+  await cbUpsert('eventLogs', agentId, { events: [] });
+  emitToAgent(agentId, 'event-log', { events: [], cleared: true });
 }
 
 // ─────────────────────────────────────────────
@@ -126,23 +146,23 @@ export async function clearEventLog(siteId: string): Promise<void> {
 // ─────────────────────────────────────────────
 
 export async function appendSchedulerRun(
-  siteId: string,
+  agentId: string,
   run: SchedulerRun
 ): Promise<void> {
-  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', siteId);
+  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', agentId);
   const runs = [run, ...(doc?.runs ?? [])].slice(0, MAX_SCHEDULER_RUNS);
-  await cbUpsert('schedulerRuns', siteId, { runs });
+  await cbUpsert('schedulerRuns', agentId, { runs });
 }
 
 export async function getLastSchedulerRun(
-  siteId: string
+  agentId: string
 ): Promise<SchedulerRun | null> {
-  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', siteId);
+  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', agentId);
   return doc?.runs[0] ?? null;
 }
 
-export async function getSchedulerRuns(siteId: string): Promise<SchedulerRun[]> {
-  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', siteId);
+export async function getSchedulerRuns(agentId: string): Promise<SchedulerRun[]> {
+  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', agentId);
   return doc?.runs ?? [];
 }
 
@@ -151,23 +171,30 @@ export async function getSchedulerRuns(siteId: string): Promise<SchedulerRun[]> 
 // ─────────────────────────────────────────────
 
 export async function appendSession(
-  siteId: string,
+  agentId: string,
   session: SessionRecord
 ): Promise<void> {
-  const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', siteId);
+  const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', agentId);
   const sessions = [session, ...(doc?.sessions ?? [])].slice(0, MAX_SESSIONS);
-  await cbUpsert('sessions', siteId, { sessions });
-  emitToSite(siteId, 'session', { session });
+  await cbUpsert('sessions', agentId, { sessions });
+  emitToAgent(agentId, 'session', { session });
 }
 
-export async function getSessions(siteId: string): Promise<SessionRecord[]> {
-  const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', siteId);
-  return doc?.sessions ?? [];
+export async function getSessions(agentId: string): Promise<SessionRecord[]> {
+  console.debug(`[DB:getSessions] querying collection=sessions key="${agentId}"`);
+  const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', agentId);
+  if (!doc) {
+    console.debug(`[DB:getSessions] document not found for key="${agentId}" — returning []`);
+    return [];
+  }
+  const count = doc.sessions?.length ?? 0;
+  console.debug(`[DB:getSessions] found ${count} sessions for key="${agentId}"`);
+  return doc.sessions ?? [];
 }
 
-export async function clearSessions(siteId: string): Promise<void> {
-  await cbUpsert('sessions', siteId, { sessions: [] });
-  emitToSite(siteId, 'session', { sessions: [], cleared: true });
+export async function clearSessions(agentId: string): Promise<void> {
+  await cbUpsert('sessions', agentId, { sessions: [] });
+  emitToAgent(agentId, 'session', { sessions: [], cleared: true });
 }
 
 // ─────────────────────────────────────────────
@@ -181,31 +208,28 @@ export interface DistributionState {
   cancelRequested: boolean;
 }
 
-export async function getDistributionState(siteId: string): Promise<DistributionState> {
-  const doc = await cbGet<DistributionState>('counters', `${siteId}_dist`);
+export async function getDistributionState(agentId: string): Promise<DistributionState> {
+  const doc = await cbGet<DistributionState>('counters', `${agentId}_dist`);
   return doc ?? { isDistributing: false, cancelRequested: false };
 }
 
 export async function setDistributionActive(
-  siteId: string,
+  agentId: string,
   runId: string,
   active: boolean
 ): Promise<void> {
-  const current = await getDistributionState(siteId);
-  await cbUpsert('counters', `${siteId}_dist`, {
+  const current = await getDistributionState(agentId);
+  await cbUpsert('counters', `${agentId}_dist`, {
     isDistributing: active,
     runId: active ? runId : current.runId,
     startedAt: active ? new Date().toISOString() : current.startedAt,
-    // When deactivating: always clear cancelRequested (run is done).
-    // When activating: preserve an existing true flag so a Stop All that
-    // arrived during setup is not silently discarded.
     cancelRequested: active ? current.cancelRequested : false,
   });
 }
 
-export async function setDistributionCancelRequested(siteId: string): Promise<void> {
-  const current = await getDistributionState(siteId);
-  await cbUpsert('counters', `${siteId}_dist`, { ...current, cancelRequested: true });
+export async function setDistributionCancelRequested(agentId: string): Promise<void> {
+  const current = await getDistributionState(agentId);
+  await cbUpsert('counters', `${agentId}_dist`, { ...current, cancelRequested: true });
 }
 
 // ─────────────────────────────────────────────
@@ -226,8 +250,8 @@ interface PersonaMemoryDoc {
   entries: PersonaMemoryEntry[];
 }
 
-function memoryKey(siteId: string, personaId: string): string {
-  return `persona_mem_${siteId}_${personaId}`;
+function memoryKey(agentId: string, personaId: string): string {
+  return `persona_mem_${agentId}_${personaId}`;
 }
 
 /**
@@ -235,10 +259,10 @@ function memoryKey(siteId: string, personaId: string): string {
  * Prunes entries older than MEMORY_MAX_AGE_DAYS automatically.
  */
 export async function getPersonaQueryMemory(
-  siteId: string,
+  agentId: string,
   personaId: string
 ): Promise<string[]> {
-  const doc = await cbGet<PersonaMemoryDoc>('agentData', memoryKey(siteId, personaId));
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', memoryKey(agentId, personaId));
   if (!doc?.entries?.length) return [];
 
   const cutoff = new Date();
@@ -254,11 +278,11 @@ export async function getPersonaQueryMemory(
  * and capping at MAX_PERSONA_MEMORY entries.
  */
 export async function appendPersonaQuery(
-  siteId: string,
+  agentId: string,
   personaId: string,
   query: string
 ): Promise<void> {
-  const doc = await cbGet<PersonaMemoryDoc>('agentData', memoryKey(siteId, personaId));
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', memoryKey(agentId, personaId));
   const existing = doc?.entries ?? [];
 
   const deduped = existing.filter(
@@ -270,5 +294,5 @@ export async function appendPersonaQuery(
     ...deduped,
   ].slice(0, MAX_PERSONA_MEMORY);
 
-  await cbUpsert('agentData', memoryKey(siteId, personaId), { entries: updated });
+  await cbUpsert('agentData', memoryKey(agentId, personaId), { entries: updated });
 }
