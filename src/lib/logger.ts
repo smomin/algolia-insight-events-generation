@@ -47,9 +47,15 @@ function levelTag(level: LogLevel): string {
 // Core write
 // ─────────────────────────────────────────────
 
+// Cache the resolved level so process.env is not read on every log call.
+// LOG_LEVEL is expected to be set at startup and not change at runtime.
+let _minLevel: number | undefined;
+
 function getMinLevel(): number {
+  if (_minLevel !== undefined) return _minLevel;
   const env = (process.env.LOG_LEVEL ?? 'info').toLowerCase() as LogLevel;
-  return LEVEL_RANK[env] ?? LEVEL_RANK.info;
+  _minLevel = LEVEL_RANK[env] ?? LEVEL_RANK.info;
+  return _minLevel;
 }
 
 function serializeMeta(meta: unknown): string {

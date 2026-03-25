@@ -1,5 +1,8 @@
 import { cbGet, cbUpsert, cbDelete, cbGetIndex, cbAddToIndex, cbRemoveFromIndex } from '@/lib/couchbase';
 import { emitToIndustry } from '@/lib/sse';
+
+// Module-level constant so the env var is parsed once at startup.
+const DAILY_LIMIT = parseInt(process.env.DAILY_EVENT_LIMIT_PER_INDEX ?? '1000', 10);
 import type {
   IndustryV2,
   IndustryCounters,
@@ -59,16 +62,19 @@ async function readCounters(industryId: string): Promise<IndustryCounters> {
   return doc ?? { date: getToday(), byIndex: {} };
 }
 
-export async function resetCountersIfNewDay(industryId: string): Promise<void> {
+export async function getTodayCounters(industryId: string): Promise<IndustryCounters> {
   const counters = await readCounters(industryId);
   if (counters.date !== getToday()) {
-    await cbUpsert('counters', industryId, { date: getToday(), byIndex: {} });
+    const fresh: IndustryCounters = { date: getToday(), byIndex: {} };
+    await cbUpsert('counters', industryId, fresh);
+    return fresh;
   }
+  return counters;
 }
 
-export async function getTodayCounters(industryId: string): Promise<IndustryCounters> {
-  await resetCountersIfNewDay(industryId);
-  return readCounters(industryId);
+/** Ensures counters are for today. Delegates to getTodayCounters. */
+export async function resetCountersIfNewDay(industryId: string): Promise<void> {
+  await getTodayCounters(industryId);
 }
 
 export async function incrementIndexCounter(
@@ -86,10 +92,8 @@ export async function getRemainingBudget(
   industryId: string,
   indexId: string
 ): Promise<number> {
-  await resetCountersIfNewDay(industryId);
-  const counters = await readCounters(industryId);
-  const limit = parseInt(process.env.DAILY_EVENT_LIMIT_PER_INDEX ?? '1000', 10);
-  return Math.max(0, limit - (counters.byIndex[indexId] ?? 0));
+  const counters = await getTodayCounters(industryId);
+  return Math.max(0, DAILY_LIMIT - (counters.byIndex[indexId] ?? 0));
 }
 
 // ─────────────────────────────────────────────
@@ -194,9 +198,9 @@ export async function setDistributionActive(
     isDistributing: active,
     runId: active ? runId : current.runId,
     startedAt: active ? new Date().toISOString() : current.startedAt,
-    // Always clear cancelRequested when deactivating so a previous stop
-    // request never bleeds into the next run or causes a stuck "Stopping…" state.
-    cancelRequested: active ? false : false,
+    // Always clear cancelRequested (on both activate and deactivate) so a
+    // previous stop request never bleeds into the next run.
+    cancelRequested: false,
   });
 }
 

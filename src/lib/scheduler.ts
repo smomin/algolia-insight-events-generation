@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import type { Persona, SchedulerRun, IndustryV2, FlexIndex } from '@/types';
 import { emitToIndustry } from '@/lib/sse';
 import { createLogger } from '@/lib/logger';
+import { shuffle, sleep, randomInt, generateId as _generateId } from '@/lib/utils';
 
 const log = createLogger('Scheduler');
 import {
@@ -73,30 +74,8 @@ function emitStatus(industryId: string, overrides: Record<string, unknown> = {})
 // Utilities
 // ─────────────────────────────────────────────
 
-function generateId(): string {
-  return `run_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function generateSessionId(): string {
-  return `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
+function generateRunId(): string { return _generateId('run'); }
+function generateSessionId(): string { return _generateId('sess'); }
 
 // ─────────────────────────────────────────────
 // Core: run a single persona session (N-index)
@@ -362,7 +341,7 @@ export async function distributeSessionsForDay(
     distLog.warn('distribution already in progress — skipping duplicate request');
     return (
       state.currentRun ?? {
-        id: generateId(),
+        id: generateRunId(),
         industryId: industry.id,
         startedAt: new Date().toISOString(),
         sessionsPlanned: 0,
@@ -389,7 +368,7 @@ export async function distributeSessionsForDay(
   const finalMax = isFinite(maxSessions) && maxSessions > 0 ? maxSessions : 0;
 
   const run: SchedulerRun = {
-    id: generateId(),
+    id: generateRunId(),
     industryId: industry.id,
     startedAt: new Date().toISOString(),
     sessionsPlanned: finalMax,

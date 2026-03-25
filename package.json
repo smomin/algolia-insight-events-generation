@@ -9,8 +9,8 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.37.0",
-    "algoliasearch": "^5.0.0",
+    "@anthropic-ai/sdk": "^0.80.0",
+    "algoliasearch": "^5.50.0",
     "couchbase": "^4.6.1",
     "next": "^14.2.0",
     "node-cron": "^3.0.3",

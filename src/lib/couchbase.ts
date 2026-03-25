@@ -61,6 +61,11 @@ export type CollectionName = (typeof COLLECTIONS)[number];
 
 let _initPromise: Promise<Cluster> | null = null;
 
+// Cache Collection objects so we don't traverse bucket→scope→collection on
+// every read/write. Cleared when the cluster connection fails so reconnects
+// get fresh handles.
+const _collections = new Map<CollectionName, Collection>();
+
 async function initCluster(): Promise<Cluster> {
   const url = process.env.COUCHBASE_URL ?? 'couchbase://localhost';
   const username = process.env.COUCHBASE_USERNAME ?? 'Administrator';
@@ -101,7 +106,8 @@ async function initCluster(): Promise<Cluster> {
 function getCluster(): Promise<Cluster> {
   if (!_initPromise) {
     _initPromise = initCluster().catch((err) => {
-      _initPromise = null; // reset so we retry on next call
+      _initPromise = null;
+      _collections.clear(); // drop cached handles so the next attempt gets fresh ones
       throw err;
     });
   }
@@ -113,8 +119,12 @@ function getCluster(): Promise<Cluster> {
 // ─────────────────────────────────────────────
 
 export async function getCollection(name: CollectionName): Promise<Collection> {
+  const cached = _collections.get(name);
+  if (cached) return cached;
   const cluster = await getCluster();
-  return cluster.bucket(BUCKET_NAME).scope(SCOPE_NAME).collection(name);
+  const coll = cluster.bucket(BUCKET_NAME).scope(SCOPE_NAME).collection(name);
+  _collections.set(name, coll);
+  return coll;
 }
 
 /** Get a document; returns null if it does not exist. */

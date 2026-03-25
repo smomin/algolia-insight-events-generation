@@ -22,13 +22,14 @@ import { getTodayCounters, resetCountersIfNewDay } from '@/lib/db';
 import { appendSupervisorDecision } from '@/lib/agentDb';
 import { industryAgent } from './IndustryAgent';
 import { createLogger } from '@/lib/logger';
+import { generateId } from '@/lib/utils';
 
 const log = createLogger('Supervisor');
 
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
-function generateId(): string {
-  return `sup_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+function supervisorId(): string {
+  return generateId('sup');
 }
 
 // ─────────────────────────────────────────────
@@ -167,7 +168,7 @@ async function supervisorTick(): Promise<void> {
     if (personas.length === 0) {
       ilog.warn('no personas configured — skipping');
       const decision: SupervisorDecision = {
-        id: generateId(),
+        id: supervisorId(),
         timestamp: new Date().toISOString(),
         industryId: industry.id,
         industryName: industry.name,
@@ -203,7 +204,7 @@ async function supervisorTick(): Promise<void> {
     });
 
     const decision: SupervisorDecision = {
-      id: generateId(),
+      id: supervisorId(),
       timestamp: new Date().toISOString(),
       industryId: industry.id,
       industryName: industry.name,

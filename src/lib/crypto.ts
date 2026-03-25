@@ -13,7 +13,12 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;
 const SALT = 'algolia-insight-cfg-v1';
 
+// scryptSync is CPU-intensive — derive once and cache for the process lifetime.
+// The key is deterministic given ENCRYPTION_SECRET, so caching is safe.
+let _key: Buffer | undefined;
+
 function deriveKey(): Buffer {
+  if (_key) return _key;
   const secret = process.env.ENCRYPTION_SECRET;
   if (!secret) {
     throw new Error(
@@ -21,7 +26,8 @@ function deriveKey(): Buffer {
       'Set it to a strong random string (min 32 chars) before starting the app.'
     );
   }
-  return scryptSync(secret, SALT, 32);
+  _key = scryptSync(secret, SALT, 32);
+  return _key;
 }
 
 /** Encrypt a plain-text string. Returns a compact hex string. */

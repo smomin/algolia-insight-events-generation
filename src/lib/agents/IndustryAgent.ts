@@ -40,6 +40,8 @@ import {
 } from '@/lib/db';
 import { guardrailsAgent, GUARDRAIL_MAX_RETRIES } from './GuardrailsAgent';
 import { createLogger } from '@/lib/logger';
+import { shuffle, sleep, randomInt, generateId } from '@/lib/utils';
+import { getEventLimit } from '@/lib/industries';
 
 const log = createLogger('IndustryAgent');
 
@@ -94,24 +96,7 @@ function setPhase(industryId: string, phase: AgentPhase, extra?: Partial<AgentSt
 // ─────────────────────────────────────────────
 
 function generateSessionId(): string {
-  return `agent_sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
+  return generateId('agent_sess');
 }
 
 // ─────────────────────────────────────────────
@@ -433,7 +418,7 @@ export class IndustryAgent {
     await resetCountersIfNewDay(industry.id);
     const counters = await getTodayCounters(industry.id);
     const totalToday = Object.values(counters.byIndex).reduce((s, n) => s + n, 0);
-    const eventLimit = parseInt(process.env.DAILY_EVENT_LIMIT_PER_INDEX ?? '1000', 10);
+    const eventLimit = getEventLimit();
     const indexCount = Math.max(1, industry.indices.filter((i) => i.events.length > 0).length);
 
     batchLog.info('batch start', {

@@ -7,6 +7,7 @@ import type {
 } from '@/types';
 import { resolveCredentials } from './appConfig';
 import { createLogger } from './logger';
+import { randomInt } from './utils';
 
 const log = createLogger('Insights');
 
@@ -17,9 +18,6 @@ function randomFloat(min: number, max: number): number {
   return Math.round((Math.random() * (max - min) + min) * 100) / 100;
 }
 
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
 
 export async function sendEvents(
   events: InsightEvent[],
@@ -209,63 +207,3 @@ export function toSentEvents(
   }));
 }
 
-// ─────────────────────────────────────────────
-// Legacy builders — kept for any remaining references
-// ─────────────────────────────────────────────
-
-export function buildPrimaryEvents(
-  persona: { userToken: string },
-  indexName: string,
-  objectID: string,
-  position: number,
-  queryID: string,
-  eventNames: { click: string; view: string; conversion: string }
-): InsightEvent[] {
-  return buildFlexIndexEvents(
-    persona,
-    {
-      id: 'primary',
-      label: '',
-      indexName,
-      role: 'primary',
-      events: [
-        { eventType: 'click', eventName: eventNames.click },
-        { eventType: 'view', eventName: eventNames.view },
-        { eventType: 'conversion', eventName: eventNames.conversion },
-      ],
-    },
-    { objectID },
-    position,
-    queryID,
-    []
-  );
-}
-
-export function buildSecondaryEvents(
-  persona: { userToken: string },
-  indexName: string,
-  products: CartProduct[],
-  eventNames: { click: string; view: string; addToCart: string; purchase: string }
-): InsightEvent[] {
-  const firstProduct = products[0] ?? { objectID: '', queryID: '' };
-  const primaryHit: { objectID: string } = firstProduct;
-  return buildFlexIndexEvents(
-    persona,
-    {
-      id: 'secondary',
-      label: '',
-      indexName,
-      role: 'secondary',
-      events: [
-        { eventType: 'click', eventName: eventNames.click },
-        { eventType: 'view', eventName: eventNames.view },
-        { eventType: 'conversion', eventSubtype: 'addToCart', eventName: eventNames.addToCart },
-        { eventType: 'conversion', eventSubtype: 'purchase', eventName: eventNames.purchase },
-      ],
-    },
-    primaryHit,
-    1,
-    firstProduct.queryID,
-    products
-  );
-}
