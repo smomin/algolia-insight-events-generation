@@ -167,6 +167,7 @@ export default function PersonaSelector({
   const [search, setSearch] = useState('');
   const [generateModalOpen, setGenerateModalOpen] = useState(false);
   const [editingPersona, setEditingPersona] = useState<Persona | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   const filtered = search
     ? personas.filter(
@@ -221,72 +222,91 @@ export default function PersonaSelector({
 
   return (
     <>
-    <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-5">
-      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
-        <div>
-          <h2 className="text-lg font-semibold text-white">
-            Personas
-            <span className="ml-2 text-sm font-normal text-slate-400">
-              ({filtered.length} of {personas.length})
-            </span>
-          </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {personas.length} personas available for this site
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(0);
-            }}
-            placeholder="Search personas…"
-            className="bg-slate-700 border border-slate-600 text-slate-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500 w-48"
-          />
-          <button
-            onClick={() => setGenerateModalOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
-          >
-            <span>✨</span>
-            Generate
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-        {displayed.map((persona) => (
-          <PersonaCard
-            key={persona.id}
-            persona={persona}
-            onRun={handleRun}
-            onEdit={setEditingPersona}
-            running={runningId === persona.id}
-          />
-        ))}
-      </div>
-
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-3 mt-5">
-          <button
-            onClick={() => setPage((p) => Math.max(0, p - 1))}
-            disabled={currentPage === 0}
-            className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white rounded-lg transition-colors"
-          >
-            ← Prev
-          </button>
-          <span className="text-sm text-slate-400">
-            Page {currentPage + 1} / {totalPages}
-            <span className="text-slate-600 ml-2">({displayed.length} shown)</span>
+    <div className="bg-slate-800/40 border border-slate-700 rounded-xl overflow-hidden">
+      {/* Combined header */}
+      <div className="flex items-center justify-between gap-3 px-4 py-3">
+        <button
+          onClick={() => setCollapsed((v) => !v)}
+          className="flex items-center gap-2 min-w-0"
+        >
+          <svg className="w-4 h-4 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          <span className="text-sm font-semibold text-white">Personas</span>
+          <span className="text-[10px] bg-slate-700 text-slate-400 border border-slate-600 px-1.5 py-0.5 rounded-full shrink-0">
+            {filtered.length}{filtered.length !== personas.length ? ` of ${personas.length}` : ''}
           </span>
+        </button>
+        <div className="flex items-center gap-2">
+          {!collapsed && (
+            <>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+                placeholder="Search personas…"
+                className="bg-slate-700 border border-slate-600 text-slate-300 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500 w-44"
+              />
+              <button
+                onClick={() => setGenerateModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg transition-colors whitespace-nowrap"
+              >
+                <span>✨</span>
+                Generate
+              </button>
+            </>
+          )}
           <button
-            onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-            disabled={currentPage >= totalPages - 1}
-            className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white rounded-lg transition-colors"
+            onClick={() => setCollapsed((v) => !v)}
+            className="text-slate-500 hover:text-slate-300 transition-colors"
           >
-            Next →
+            <svg
+              className={`w-4 h-4 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
+        </div>
+      </div>
+
+      {!collapsed && (
+        <div className="border-t border-slate-700 p-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            {displayed.map((persona) => (
+              <PersonaCard
+                key={persona.id}
+                persona={persona}
+                onRun={handleRun}
+                onEdit={setEditingPersona}
+                running={runningId === persona.id}
+              />
+            ))}
+          </div>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-3 mt-5">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={currentPage === 0}
+                className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white rounded-lg transition-colors"
+              >
+                ← Prev
+              </button>
+              <span className="text-sm text-slate-400">
+                Page {currentPage + 1} / {totalPages}
+                <span className="text-slate-600 ml-2">({displayed.length} shown)</span>
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={currentPage >= totalPages - 1}
+                className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white rounded-lg transition-colors"
+              >
+                Next →
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

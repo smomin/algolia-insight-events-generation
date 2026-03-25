@@ -131,6 +131,7 @@ export default function EventLog({ agentId, events: eventsProp, sessions: sessio
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [localLastUpdated, setLocalLastUpdated] = useState<Date | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   // Prefer parent-streamed data; fall back to locally fetched data.
   const events = eventsProp ?? eventsLocal;
@@ -231,64 +232,71 @@ export default function EventLog({ agentId, events: eventsProp, sessions: sessio
   };
 
   return (
-    <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
+    <div className="bg-slate-800/40 border border-slate-700 rounded-xl overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-        <div>
-          <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-            </svg>
-            <h2 className="text-base font-semibold text-white">Event Log</h2>
-          </div>
-          <p className="text-xs text-slate-500 mt-0.5">
-            {sessionGroups.length} sessions · {events.length} events · live via SSE
-            {lastUpdated && (
-              <span> · {lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-            )}
-          </p>
-        </div>
+      <div className="flex items-center justify-between px-4 py-3">
+        <button onClick={() => setCollapsed((v) => !v)} className="flex items-center gap-2 min-w-0">
+          <svg className="w-4 h-4 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          <h2 className="text-sm font-semibold text-white">Event Log</h2>
+          <span className="text-[10px] bg-slate-700 text-slate-400 border border-slate-600 px-1.5 py-0.5 rounded-full shrink-0">
+            {events.length}
+          </span>
+        </button>
         <div className="flex items-center gap-2">
-          {/* Type distribution pills */}
-          {Object.entries(typeDistribution).length > 0 && (
-            <div className="hidden sm:flex items-center gap-1.5 mr-2">
-              {Object.entries(typeDistribution).map(([type, count]) => (
-                <span
-                  key={type}
-                  className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border capitalize ${EVENT_TYPE_STYLE[type] ?? 'bg-slate-700 text-slate-400 border-slate-600'}`}
-                >
-                  {type} {count}
-                </span>
-              ))}
-            </div>
+          {!collapsed && (
+            <>
+              {/* Type distribution pills */}
+              {Object.entries(typeDistribution).length > 0 && (
+                <div className="hidden sm:flex items-center gap-1.5 mr-1">
+                  {Object.entries(typeDistribution).map(([type, count]) => (
+                    <span
+                      key={type}
+                      className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border capitalize ${EVENT_TYPE_STYLE[type] ?? 'bg-slate-700 text-slate-400 border-slate-600'}`}
+                    >
+                      {type} {count}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <button
+                onClick={fetchLog}
+                disabled={loading}
+                className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600 hover:border-slate-400 transition-colors disabled:opacity-50 flex items-center gap-1"
+              >
+                {loading ? (
+                  <span className="w-3 h-3 border border-slate-400/30 border-t-slate-400 rounded-full animate-spin" />
+                ) : (
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                )}
+                Refresh
+              </button>
+              <button
+                onClick={handleClear}
+                disabled={loading || events.length === 0}
+                className="text-xs text-rose-400 hover:text-rose-300 disabled:opacity-40 px-2 py-1 rounded border border-rose-800/60 hover:border-rose-600 transition-colors"
+              >
+                Clear
+              </button>
+            </>
           )}
-          <button
-            onClick={fetchLog}
-            disabled={loading}
-            className="text-xs text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-600 hover:border-slate-400 transition-colors disabled:opacity-50 flex items-center gap-1"
-          >
-            {loading ? (
-              <span className="w-3 h-3 border border-slate-400/30 border-t-slate-400 rounded-full animate-spin" />
-            ) : (
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            )}
-            Refresh
-          </button>
-          <button
-            onClick={handleClear}
-            disabled={loading || events.length === 0}
-            className="text-xs text-rose-400 hover:text-rose-300 disabled:opacity-40 px-2 py-1 rounded border border-rose-800/60 hover:border-rose-600 transition-colors"
-          >
-            Clear
+          <button onClick={() => setCollapsed((v) => !v)} className="text-slate-500 hover:text-slate-300 transition-colors">
+            <svg
+              className={`w-4 h-4 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
         </div>
       </div>
 
       {/* Summary stats */}
-      {sessionGroups.length > 0 && (
+      {!collapsed && sessionGroups.length > 0 && (
         <div className="grid grid-cols-3 border-b border-slate-700/50 bg-slate-800/60">
           <div className="px-4 py-2.5 text-center border-r border-slate-700/50">
             <p className="text-base font-bold text-white">{sessionGroups.length}</p>
@@ -308,7 +316,7 @@ export default function EventLog({ agentId, events: eventsProp, sessions: sessio
       )}
 
       {/* Session groups */}
-      <div className="overflow-y-auto max-h-[520px]">
+      {!collapsed && <div className="overflow-y-auto max-h-[520px]">
         {sessionGroups.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-32 gap-2">
             <svg className="w-8 h-8 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -392,7 +400,7 @@ export default function EventLog({ agentId, events: eventsProp, sessions: sessio
             })}
           </div>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

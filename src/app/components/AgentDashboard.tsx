@@ -501,6 +501,13 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
   const tabSite = sites.find((s) => s.id === activeTab);
   const tabViolations = activeTab !== 'overview' ? (guardrailsBySite[activeTab] ?? []) : [];
 
+  // Auto-switch to overview if the active tab's agent was deleted
+  useEffect(() => {
+    if (activeTab !== 'overview' && !sites.find((s) => s.id === activeTab)) {
+      setActiveTab('overview');
+    }
+  }, [sites, activeTab]);
+
   return (
     <div className="space-y-5">
       {/* ── Control panel ─────────────────────────────────────────── */}
@@ -844,7 +851,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                     algoliaApp={algoliaApp ? { name: algoliaApp.name, appId: algoliaApp.appId, isOverride: !!site.algoliaAppConfigId } : undefined}
                     llmProvider={llmProvider ? { name: llmProvider.name, model: llmProvider.defaultModel, isOverride: !!site.llmProviderId } : undefined}
                     onEdit={() => onEditSite(site.id)}
-                    onDelete={!site.isBuiltIn ? () => onDeleteSite(site.id) : undefined}
+                    onDelete={() => onDeleteSite(site.id)}
                     onViewDetails={() => setActiveTab(site.id)}
                   />
                 );
@@ -893,8 +900,10 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                     personaCount={tabSite.personaCount}
                     algoliaApp={algoliaApp ? { name: algoliaApp.name, appId: algoliaApp.appId, isOverride: !!tabSite.algoliaAppConfigId } : undefined}
                     llmProvider={llmProvider ? { name: llmProvider.name, model: llmProvider.defaultModel, isOverride: !!tabSite.llmProviderId } : undefined}
+                    indices={tabSite.indices}
+                    siteUrl={tabSite.siteUrl}
                     onEdit={() => onEditSite(tabSite.id)}
-                    onDelete={!tabSite.isBuiltIn ? () => onDeleteSite(tabSite.id) : undefined}
+                    onDelete={() => onDeleteSite(tabSite.id)}
                     expanded
                   />
                 );
@@ -902,34 +911,18 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
             </div>
           </div>
 
-          {/* Index summary chips */}
-          <div className="flex flex-wrap gap-2">
-            {tabSite.indices.map((idx) => (
-              <div key={idx.id} className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5">
-                <span className={`text-[10px] font-bold uppercase tracking-wider ${idx.role === 'primary' ? 'text-blue-400' : 'text-slate-400'}`}>
-                  {idx.role}
-                </span>
-                <span className="text-xs font-medium text-slate-300">{idx.label || idx.id}</span>
-                {idx.indexName && (
-                  <code className="text-[10px] text-slate-500 font-mono bg-slate-700 px-1.5 py-0.5 rounded">{idx.indexName}</code>
-                )}
-                <span className="text-[10px] text-slate-600">{idx.events.length} events</span>
-              </div>
-            ))}
-            {tabSite.siteUrl && (
-              <a
-                href={tabSite.siteUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 hover:border-blue-700 rounded-lg px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"
-              >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-                {tabSite.siteUrl}
-              </a>
-            )}
-          </div>
+          {/* Supervisor decisions for this agent */}
+          <SupervisorLog
+            decisions={supervisorDecisions.filter((d) => (d.agentId ?? d.siteId) === tabSite.id)}
+            isRunning={supervisorStatus.isRunning}
+            lastRunAt={supervisorStatus.lastRunAt}
+          />
+
+          {/* Guardrail violations for this site */}
+          <GuardrailLog
+            violations={tabViolations}
+            siteName={tabSite.name}
+          />
 
           {/* Personas */}
           {tabSite.id in personasBySite ? (
@@ -959,7 +952,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               }}
             />
           ) : (
-            <div className="bg-slate-800/50 rounded-xl border border-slate-700 p-8 text-center">
+            <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-8 text-center">
               <div className="flex items-center justify-center gap-2 mb-1">
                 {personasLoading[tabSite.id] && (
                   <span className="w-3.5 h-3.5 border-2 border-slate-600 border-t-slate-400 rounded-full animate-spin" />
@@ -992,19 +985,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
             events={eventsBySite[tabSite.id]}
             sessions={sessionsBySite[tabSite.id]}
             lastUpdated={sseLastUpdated[tabSite.id] ?? null}
-          />
-
-          {/* Supervisor decisions for this agent */}
-          <SupervisorLog
-            decisions={supervisorDecisions.filter((d) => (d.agentId ?? d.siteId) === tabSite.id)}
-            isRunning={supervisorStatus.isRunning}
-            lastRunAt={supervisorStatus.lastRunAt}
-          />
-
-          {/* Guardrail violations for this site */}
-          <GuardrailLog
-            violations={tabViolations}
-            siteName={tabSite.name}
           />
         </div>
       )}

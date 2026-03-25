@@ -88,7 +88,7 @@ export const updateSite = updateAgent;
 
 export async function removeAgent(id: string): Promise<boolean> {
   const cfg = await getAgentConfig(id);
-  if (!cfg || cfg.isBuiltIn) return false;
+  if (!cfg) return false;
   await deleteAgentConfig(id);
   return true;
 }

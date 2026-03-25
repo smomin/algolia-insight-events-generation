@@ -1,6 +1,6 @@
 'use client';
 
-import type { AgentState, AgentPhase } from '@/types';
+import type { AgentState, AgentPhase, FlexIndex } from '@/types';
 
 interface AlgoliaAppInfo {
   name: string;
@@ -23,6 +23,8 @@ interface Props {
   personaCount?: number;
   algoliaApp?: AlgoliaAppInfo;
   llmProvider?: LLMProviderInfo;
+  indices?: FlexIndex[];
+  siteUrl?: string;
   expanded?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
@@ -82,6 +84,8 @@ export default function AgentStatusCard({
   personaCount,
   algoliaApp,
   llmProvider,
+  indices,
+  siteUrl,
   expanded,
   onEdit,
   onDelete,
@@ -138,7 +142,7 @@ export default function AgentStatusCard({
                 <button
                   onClick={onDelete}
                   title="Delete agent"
-                  className="shrink-0 text-slate-700 hover:text-rose-400 transition-colors"
+                  className="shrink-0 text-slate-500 hover:text-rose-400 transition-colors"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -190,6 +194,37 @@ export default function AgentStatusCard({
                 <span className="text-violet-400/60 italic ml-0.5">override</span>
               )}
             </span>
+          )}
+        </div>
+      )}
+
+      {/* Index chips */}
+      {((indices && indices.length > 0) || siteUrl) && (
+        <div className="flex flex-wrap gap-1.5">
+          {indices?.map((idx) => (
+            <div key={idx.id} className="flex items-center gap-1.5 bg-slate-900/60 border border-slate-700/80 rounded-lg px-2 py-1">
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${idx.role === 'primary' ? 'text-blue-400' : 'text-slate-400'}`}>
+                {idx.role}
+              </span>
+              <span className="text-[10px] font-medium text-slate-300">{idx.label || idx.id}</span>
+              {idx.indexName && (
+                <code className="text-[10px] text-slate-500 font-mono bg-slate-800 px-1 py-0.5 rounded">{idx.indexName}</code>
+              )}
+              <span className="text-[10px] text-slate-600">{idx.events.length} events</span>
+            </div>
+          ))}
+          {siteUrl && (
+            <a
+              href={siteUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 bg-slate-900/60 border border-slate-700/80 hover:border-blue-700 rounded-lg px-2 py-1 text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+            >
+              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+              {siteUrl}
+            </a>
           )}
         </div>
       )}

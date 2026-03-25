@@ -66,12 +66,6 @@ export async function DELETE(
     if (!agent) {
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
-    if (agent.isBuiltIn) {
-      return NextResponse.json(
-        { error: 'Built-in agents cannot be deleted' },
-        { status: 403 }
-      );
-    }
     await removeAgent(id);
     return NextResponse.json({ success: true });
   } catch (err) {
