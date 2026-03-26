@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 
 interface SessionRecord {
   id: string;
@@ -238,16 +238,15 @@ export default function SessionHistory({ agentId, isActive = false, sessions: se
             </thead>
             <tbody>
               {sessionsByDate.map(({ date, sessions: dateSessions }) => (
-                <>
-                  <tr key={`date-${date}`}>
+                <React.Fragment key={`date-${date}`}>
+                  <tr>
                     <td colSpan={4 + allIndexIds.length} className="px-3 py-1.5 bg-slate-900/30">
                       <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{date}</span>
                     </td>
                   </tr>
                   {dateSessions.map((session) => (
-                    <>
+                    <React.Fragment key={session.id}>
                       <tr
-                        key={session.id}
                         className="border-b border-slate-700/40 hover:bg-slate-700/30 transition-colors cursor-pointer"
                         onClick={() => setExpandedId((p) => p === session.id ? null : session.id)}
                       >
@@ -299,9 +298,9 @@ export default function SessionHistory({ agentId, isActive = false, sessions: se
                           </td>
                         </tr>
                       )}
-                    </>
+                    </React.Fragment>
                   ))}
-                </>
+                </React.Fragment>
               ))}
             </tbody>
           </table>
