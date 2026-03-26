@@ -1,18 +1,19 @@
 import { NextResponse } from 'next/server';
-import { getAllIndustries, createIndustry, getPersonas } from '@/lib/industries';
-import type { IndustryV2 } from '@/types';
+import { getAllAgents, createAgent, getPersonas } from '@/lib/agentConfigs';
+import type { AgentConfig } from '@/types';
 
 export async function GET() {
   try {
-    const industries = await getAllIndustries();
+    const agents = await getAllAgents();
 
     const result = await Promise.all(
-      industries.map(async (ind) => {
-        const personas = await getPersonas(ind);
+      agents.map(async (agent) => {
+        const personas = await getPersonas(agent);
         return {
-          ...ind,
+          ...agent,
           personaCount: personas.length,
-          indices: ind.indices.map((idx) => ({
+          personas,
+          indices: agent.indices.map((idx) => ({
             id: idx.id,
             label: idx.label,
             indexName: idx.indexName,
@@ -24,7 +25,7 @@ export async function GET() {
       })
     );
 
-    return NextResponse.json({ industries: result });
+    return NextResponse.json({ agents: result });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -34,7 +35,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as Partial<
-      Omit<IndustryV2, 'isBuiltIn' | 'createdAt' | 'updatedAt'>
+      Omit<AgentConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'>
     >;
 
     if (!body.id || !body.name || !body.indices || body.indices.length === 0) {
@@ -51,11 +52,12 @@ export async function POST(request: Request) {
       );
     }
 
-    const industry = await createIndustry({
+    const agent = await createAgent({
       id: body.id,
       name: body.name,
-      icon: body.icon ?? '🏭',
+      icon: body.icon ?? '🤖',
       color: body.color ?? 'blue',
+      ...(body.siteUrl ? { siteUrl: body.siteUrl } : {}),
       indices: body.indices,
       claudePrompts: body.claudePrompts ?? {
         generatePrimaryQuery:
@@ -70,7 +72,7 @@ export async function POST(request: Request) {
       ...(body.algoliaAppConfigId ? { algoliaAppConfigId: body.algoliaAppConfigId } : {}),
     });
 
-    return NextResponse.json({ industry }, { status: 201 });
+    return NextResponse.json({ agent }, { status: 201 });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });

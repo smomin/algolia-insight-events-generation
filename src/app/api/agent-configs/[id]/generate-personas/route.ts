@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { getIndustry, getPersonas, savePersonas } from '@/lib/industries';
+import { getAgent, getPersonas, savePersonas } from '@/lib/agentConfigs';
 import { sampleIndex } from '@/lib/algolia';
-import { generatePersonasForIndustry, type IndexSample } from '@/lib/anthropic';
+import { generatePersonasForSite, type IndexSample } from '@/lib/anthropic';
 import { getRawAppConfig } from '@/lib/appConfig';
 
 export async function POST(
@@ -14,13 +14,13 @@ export async function POST(
     const count = Math.min(Math.max(1, body.count ?? 5), 100);
     const append = body.append !== false; // default true — append to existing
 
-    const industry = await getIndustry(id);
-    if (!industry) {
-      return NextResponse.json({ error: 'Industry not found' }, { status: 404 });
+    const agent = await getAgent(id);
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
 
     // Sample records from every configured index that has an indexName
-    const samplePromises = industry.indices
+    const samplePromises = agent.indices
       .filter((idx) => idx.indexName && idx.indexName.trim() !== '')
       .map(async (idx): Promise<IndexSample> => {
         const records = await sampleIndex(idx.indexName, 25);
@@ -36,7 +36,7 @@ export async function POST(
     const totalSampled = indexSamples.reduce((s, i) => s + i.sampleRecords.length, 0);
 
     // Collect existing persona names to avoid duplicates
-    const existingPersonas = await getPersonas(industry);
+    const existingPersonas = await getPersonas(agent);
     const existingNames = existingPersonas.map((p) => p.name);
 
     // Resolve the persona generation LLM provider override (if configured)
@@ -44,8 +44,8 @@ export async function POST(
     const personaLlmProviderIdOverride = appConfig?.personaGenerationLlmProviderId;
 
     // Ask the LLM to generate personas
-    const generated = await generatePersonasForIndustry(
-      industry.name,
+    const generated = await generatePersonasForSite(
+      agent.name,
       indexSamples,
       count,
       existingNames,
@@ -53,8 +53,8 @@ export async function POST(
       personaLlmProviderIdOverride
     );
 
-    // Tag each generated persona with the industry
-    const tagged = generated.map((p) => ({ ...p, industry: id }));
+    // Tag each generated persona with the agent
+    const tagged = generated.map((p) => ({ ...p, agentId: id }));
 
     // Save: append to existing or replace
     const finalPersonas = append ? [...existingPersonas, ...tagged] : tagged;

@@ -1,5 +1,8 @@
 import { algoliasearch } from 'algoliasearch';
 import { resolveCredentials } from './appConfig';
+import { createLogger } from './logger';
+
+const log = createLogger('Algolia');
 
 export interface SearchResult {
   hits: AlgoliaHit[];
@@ -11,8 +14,11 @@ export interface AlgoliaHit {
   [key: string]: unknown;
 }
 
-async function getClient(industryId?: string) {
-  const creds = await resolveCredentials(industryId);
+async function getClient(agentId?: string) {
+  const creds = await resolveCredentials(agentId);
+  if (!creds.algoliaAppId || !creds.algoliaSearchApiKey) {
+    log.error('missing credentials — set them in App Settings', { agentId });
+  }
   return algoliasearch(creds.algoliaAppId, creds.algoliaSearchApiKey);
 }
 
@@ -21,24 +27,41 @@ export async function searchIndex(
   query: string,
   userToken: string,
   hitsPerPage = 10,
-  industryId?: string
+  agentId?: string
 ): Promise<SearchResult> {
-  const client = await getClient(industryId);
-  const response = await client.searchSingleIndex({
-    indexName,
-    searchParams: {
+  log.debug('search', { indexName, query, userToken, hitsPerPage, agentId });
+  const start = Date.now();
+  const client = await getClient(agentId);
+
+  try {
+    const response = await client.searchSingleIndex({
+      indexName,
+      searchParams: {
+        query,
+        analytics: true,
+        clickAnalytics: true,
+        enablePersonalization: true,
+        userToken,
+        hitsPerPage,
+      },
+    });
+
+    log.debug('search result', {
+      indexName,
       query,
-      analytics: true,
-      clickAnalytics: true,
-      enablePersonalization: true,
-      userToken,
-      hitsPerPage,
-    },
-  });
-  return {
-    hits: response.hits as AlgoliaHit[],
-    queryID: response.queryID ?? '',
-  };
+      hitCount: response.hits.length,
+      queryID: response.queryID,
+      durationMs: Date.now() - start,
+    });
+
+    return {
+      hits: response.hits as AlgoliaHit[],
+      queryID: response.queryID ?? '',
+    };
+  } catch (err) {
+    log.error('search failed', { indexName, query, error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
 }
 
 /**
@@ -48,10 +71,11 @@ export async function searchIndex(
 export async function sampleIndex(
   indexName: string,
   hitsPerPage = 20,
-  industryId?: string
+  agentId?: string
 ): Promise<AlgoliaHit[]> {
   if (!indexName) return [];
-  const client = await getClient(industryId);
+  log.debug('sample index', { indexName, hitsPerPage, agentId });
+  const client = await getClient(agentId);
   try {
     const response = await client.searchSingleIndex({
       indexName,
@@ -62,8 +86,10 @@ export async function sampleIndex(
         clickAnalytics: false,
       },
     });
+    log.debug('sample result', { indexName, hitCount: response.hits.length });
     return response.hits as AlgoliaHit[];
-  } catch {
+  } catch (err) {
+    log.warn('sample failed, returning empty', { indexName, error: err instanceof Error ? err.message : String(err) });
     return [];
   }
 }

@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { runPersonaSession } from '@/lib/scheduler';
 import { getRemainingBudget } from '@/lib/db';
-import { getIndustry, getPersonas } from '@/lib/industries';
+import { getAgent, getPersonas } from '@/lib/agentConfigs';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const personaId = body.personaId as string | undefined;
-    const industryId = (body.industryId as string | undefined) ?? process.env.DEFAULT_INDUSTRY_ID ?? 'grocery';
+    const agentId = (body.agentId as string | undefined) ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
 
-    const industry = await getIndustry(industryId);
-    if (!industry) {
+    const agent = await getAgent(agentId);
+    if (!agent) {
       return NextResponse.json(
-        { error: `Industry "${industryId}" not found` },
+        { error: `Agent "${agentId}" not found` },
         { status: 404 }
       );
     }
 
-    const personas = await getPersonas(industry);
+    const personas = await getPersonas(agent);
     const persona = personaId
       ? personas.find((p) => p.id === personaId)
       : personas[Math.floor(Math.random() * personas.length)];
@@ -28,26 +28,26 @@ export async function POST(req: NextRequest) {
 
     // Check budget across all configured indices
     const budgetChecks = await Promise.all(
-      industry.indices
+      agent.indices
         .filter((idx) => idx.events.length > 0)
         .map(async (idx) => {
-          const remaining = await getRemainingBudget(industryId, idx.id);
+          const remaining = await getRemainingBudget(agentId, idx.id);
           return remaining < idx.events.length;
         })
     );
 
     if (budgetChecks.some(Boolean)) {
       return NextResponse.json(
-        { error: 'Daily event budget exhausted for this industry.' },
+        { error: 'Daily event budget exhausted for this agent.' },
         { status: 429 }
       );
     }
 
-    const result = await runPersonaSession(persona, industry);
+    const result = await runPersonaSession(persona, agent);
 
     return NextResponse.json({
       persona: { id: persona.id, name: persona.name },
-      industryId,
+      agentId,
       ...result,
     });
   } catch (err) {

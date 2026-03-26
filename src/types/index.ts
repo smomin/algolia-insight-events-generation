@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────
-// Flexible N-index industry model (V2)
+// Flexible N-index agent model
 // ─────────────────────────────────────────────
 
 export type AlgoliaEventType = 'view' | 'click' | 'conversion';
@@ -12,13 +12,21 @@ export interface IndexEvent {
   eventName: string;
 }
 
-/** A configured Algolia index belonging to an industry */
+/** Per-index system prompt overrides for the IndexAgent. */
+export interface IndexAgentPrompts {
+  /** System prompt override for this index's agent (takes priority over global defaults). */
+  systemPrompt?: string;
+}
+
+/** A configured Algolia index belonging to an agent */
 export interface FlexIndex {
-  id: string;       // slug unique within industry, e.g. "recipes" or "hotels"
-  label: string;    // human-readable, e.g. "Recipes"
+  id: string;        // slug unique within agent, e.g. "recipes" or "hotels"
+  label: string;     // human-readable, e.g. "Recipes"
   indexName: string; // actual Algolia index name
   role: 'primary' | 'secondary';
   events: IndexEvent[];
+  /** Optional per-index prompt overrides for the IndexAgent. */
+  agentPrompts?: IndexAgentPrompts;
 }
 
 // ─────────────────────────────────────────────
@@ -29,12 +37,12 @@ export type LLMProviderType = 'openai' | 'anthropic' | 'ollama';
 
 /** A configured LLM provider — stored (with API key encrypted) in AppConfig */
 export interface LLMProviderConfig {
-  id: string;             // unique slug, e.g. "my-anthropic" or "local-ollama"
-  name: string;           // display name, e.g. "Anthropic (prod)"
+  id: string;           // unique slug, e.g. "my-anthropic" or "local-ollama"
+  name: string;         // display name, e.g. "Anthropic (prod)"
   type: LLMProviderType;
-  apiKey?: string;        // stored AES-256-GCM encrypted; not required for Ollama
-  baseUrl?: string;       // required for Ollama; optional for OpenAI-compatible endpoints
-  defaultModel: string;   // e.g. "claude-sonnet-4-5", "gpt-4o", "llama3.2"
+  apiKey?: string;      // stored AES-256-GCM encrypted; not required for Ollama
+  baseUrl?: string;     // required for Ollama; optional for OpenAI-compatible endpoints
+  defaultModel: string; // e.g. "claude-sonnet-4-5", "gpt-4o", "llama3.2"
 }
 
 // ─────────────────────────────────────────────
@@ -53,47 +61,48 @@ export interface AlgoliaAppConfig {
 // App-level configuration (stored encrypted in Couchbase)
 // ─────────────────────────────────────────────
 
-/** Credential fields shared by AppConfig and IndustryCredentials. */
+/** Credential fields shared by AppConfig and AgentCredentials. */
 export interface CredentialFields {
   algoliaAppId?: string;
-  algoliaSearchApiKey?: string;   // stored AES-256-GCM encrypted
+  algoliaSearchApiKey?: string; // stored AES-256-GCM encrypted
 }
 
 /** Global app credentials — single document in the appConfig collection. */
 export interface AppConfig extends CredentialFields {
   updatedAt: string;
-  llmProviders?: LLMProviderConfig[];          // all configured LLM providers
-  defaultLlmProviderId?: string;               // provider to use when no industry override
-  personaGenerationLlmProviderId?: string;     // provider used specifically for persona generation
-  algoliaApps?: AlgoliaAppConfig[];            // all configured Algolia applications
-  defaultAlgoliaAppId?: string;               // app to use when no industry override
+  llmProviders?: LLMProviderConfig[];        // all configured LLM providers
+  defaultLlmProviderId?: string;             // provider to use when no agent override
+  personaGenerationLlmProviderId?: string;   // provider used specifically for persona generation
+  algoliaApps?: AlgoliaAppConfig[];          // all configured Algolia applications
+  defaultAlgoliaAppId?: string;             // app to use when no agent override
 }
 
-/** Per-industry credential overrides — override global app config or env vars. */
-export type IndustryCredentials = CredentialFields;
+/** Per-agent credential overrides — override global app config or env vars. */
+export type AgentCredentials = CredentialFields;
 
-/** Full industry definition — stored in DB, editable via UI */
-export interface IndustryV2 {
+/** Full agent definition — stored in DB, editable via UI */
+export interface AgentConfig {
   id: string;
   name: string;
   icon: string;
   color: string;
-  indices: FlexIndex[];        // first primary, then 0-N secondaries
+  siteUrl?: string;              // optional URL of the site being simulated
+  indices: FlexIndex[];          // first primary, then 0-N secondaries
   claudePrompts: {
     generatePrimaryQuery: string;
     selectBestResult: string;
     generateSecondaryQueries: string;
   };
-  credentials?: IndustryCredentials; // optional per-industry credential overrides
-  llmProviderId?: string;       // override app-level default LLM provider for this industry
-  algoliaAppConfigId?: string;  // override app-level default Algolia app for this industry
-  isBuiltIn: boolean;          // built-in industries cannot be deleted
+  credentials?: AgentCredentials; // optional per-agent credential overrides
+  llmProviderId?: string;         // override app-level default LLM provider
+  algoliaAppConfigId?: string;    // override app-level default Algolia app
+  isBuiltIn: boolean;             // built-in agents cannot be deleted
   createdAt: string;
   updatedAt: string;
 }
 
 // ─────────────────────────────────────────────
-// Persona — generic across all industries
+// Persona — generic across all agents
 // ─────────────────────────────────────────────
 
 export interface PersonaBase {
@@ -101,7 +110,7 @@ export interface PersonaBase {
   name: string;
   userToken: string;
   description: string;
-  industry?: string;
+  agentId?: string;
   skill?: 'beginner' | 'intermediate' | 'advanced';
   budget?: 'low' | 'medium' | 'high';
   tags?: string[];
@@ -160,7 +169,7 @@ export interface SentEvent {
   event: InsightEvent;
   batchStatus: number;
   sentAt: number;
-  industryId?: string;
+  agentId?: string;
   personaId?: string;
   personaName?: string;
   sessionId?: string;
@@ -190,12 +199,12 @@ export interface SessionResult {
 }
 
 // ─────────────────────────────────────────────
-// Session record — stored in DB per-industry
+// Session record — stored in DB per-agent
 // ─────────────────────────────────────────────
 
 export interface SessionRecord {
   id: string;
-  industryId: string;
+  agentId: string;
   personaId: string;
   personaName: string;
   startedAt: string;
@@ -212,7 +221,7 @@ export interface SessionRecord {
 
 export interface SchedulerRun {
   id: string;
-  industryId: string;
+  agentId: string;
   startedAt: string;
   completedAt?: string;
   sessionsPlanned: number;
@@ -223,10 +232,10 @@ export interface SchedulerRun {
 }
 
 // ─────────────────────────────────────────────
-// Per-industry daily counters (N-index)
+// Per-agent daily counters (N-index)
 // ─────────────────────────────────────────────
 
-export interface IndustryCounters {
+export interface AgentCounters {
   date: string;
   byIndex: Record<string, number>; // FlexIndex.id → count today
 }
@@ -235,33 +244,126 @@ export interface IndustryCounters {
 // DB schema
 // ─────────────────────────────────────────────
 
-export interface IndustryData {
-  counters: IndustryCounters;
+export interface AgentData {
+  counters: AgentCounters;
   eventLog: SentEvent[];
   schedulerRuns: SchedulerRun[];
   sessions: SessionRecord[];
 }
 
 export interface DbSchema {
-  industryConfigs: Record<string, IndustryV2>; // all industry definitions
-  industries: Record<string, IndustryData>;    // per-industry runtime data
+  agentConfigs: Record<string, AgentConfig>; // all agent definitions
+  agents: Record<string, AgentData>;         // per-agent runtime data
 }
 
 // ─────────────────────────────────────────────
 // Scheduler status (returned from status API)
 // ─────────────────────────────────────────────
 
-export interface IndustrySchedulerStatus {
-  industryId: string;
+export interface AgentSchedulerStatus {
+  agentId: string;
   isRunning: boolean;
   isDistributing: boolean;
   nextRun: string | null;
-  counters: IndustryCounters;
+  counters: AgentCounters;
   eventLimit: number;
   lastRun: SchedulerRun | null;
   currentRun: SchedulerRun | null;
 }
 
 export interface AllSchedulerStatus {
-  industries: Record<string, IndustrySchedulerStatus>;
+  agents: Record<string, AgentSchedulerStatus>;
+}
+
+// ─────────────────────────────────────────────
+// Agent system types
+// ─────────────────────────────────────────────
+
+export type AgentPhase =
+  | 'idle'
+  | 'planning'
+  | 'validating'
+  | 'searching'
+  | 'sending'
+  | 'complete'
+  | 'error';
+
+export interface AgentState {
+  agentId: string;
+  phase: AgentPhase;
+  currentPersonaId?: string;
+  currentPersonaName?: string;
+  currentQuery?: string;
+  sessionsCompleted: number;
+  sessionsTarget: number;
+  eventsSentToday: number;
+  dailyTarget: number;
+  guardrailViolations: number;
+  lastActivity: string;
+  errors: string[];
+  isActive: boolean;
+}
+
+export interface GuardrailResult {
+  approved: boolean;
+  reason: string;
+  suggestedQuery?: string;
+  agentId: string;
+  personaId: string;
+  personaName: string;
+  originalQuery: string;
+  finalQuery: string;
+  attemptNumber: number;
+  timestamp: string;
+}
+
+export type SupervisorUrgency = 'ahead' | 'normal' | 'high' | 'critical';
+
+export interface SupervisorDecision {
+  id: string;
+  timestamp: string;
+  agentId: string;
+  agentName: string;
+  urgency: SupervisorUrgency;
+  sessionsDispatched: number;
+  reasoning: string;
+  progressSnapshot: {
+    sent: number;
+    target: number;
+    percentComplete: number;
+  };
+}
+
+export interface AgentSystemStatus {
+  isActive: boolean;
+  startedAt?: string;
+  mode: 'supervisor' | 'off';
+  agents: Record<string, AgentState>;
+  recentDecisions: SupervisorDecision[];
+  supervisorStatus: {
+    isRunning: boolean;
+    startedAt?: string;
+    lastRunAt?: string;
+  };
+}
+
+// ─────────────────────────────────────────────
+// Agent configuration (editable system prompts)
+// ─────────────────────────────────────────────
+
+export interface AgentPromptConfig {
+  systemPrompt: string;
+  updatedAt?: string;
+  /** Optional LLM provider override for this agent role (supervisor / guardrails). */
+  llmProviderId?: string;
+}
+
+export interface AgentConfigs {
+  supervisor: AgentPromptConfig;
+  guardrails: AgentPromptConfig;
+  workerAgent: AgentPromptConfig;
+  /** System prompt for primary index agents (drives initial discovery queries). */
+  primaryIndexAgent: AgentPromptConfig;
+  /** System prompt for secondary index agents (extends journey from primary result context). */
+  secondaryIndexAgent: AgentPromptConfig;
 }

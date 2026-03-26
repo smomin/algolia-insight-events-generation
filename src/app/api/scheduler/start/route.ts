@@ -3,56 +3,56 @@ import {
   startScheduler,
   isSchedulerRunning,
   distributeSessionsForDay,
-  getNextRunTimeForIndustry,
+  getNextRunTimeForAgent,
 } from '@/lib/scheduler';
-import { getIndustry, getPersonas, getAllIndustries } from '@/lib/industries';
+import { getAgent, getPersonas, getAllAgents } from '@/lib/agentConfigs';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const industryId = body.industryId as string | undefined;
+    const agentId = body.agentId as string | undefined;
     const runNow = body.runNow === true;
     const startAll = body.startAll === true;
 
     if (startAll) {
-      const industries = await getAllIndustries();
+      const agents = await getAllAgents();
       await Promise.all(
-        industries.map(async (industry) => {
-          const personas = await getPersonas(industry);
-          if (!isSchedulerRunning(industry.id)) startScheduler(personas, industry);
-          if (runNow) distributeSessionsForDay(personas, industry).catch(console.error);
+        agents.map(async (agent) => {
+          const personas = await getPersonas(agent);
+          if (!isSchedulerRunning(agent.id)) startScheduler(personas, agent);
+          if (runNow) distributeSessionsForDay(personas, agent).catch(console.error);
         })
       );
       return NextResponse.json({
         started: true,
         startAll: true,
-        industries: industries.map((i) => ({
-          id: i.id,
-          name: i.name,
-          nextRun: getNextRunTimeForIndustry(i.id),
+        agents: agents.map((a) => ({
+          id: a.id,
+          name: a.name,
+          nextRun: getNextRunTimeForAgent(a.id),
         })),
-        message: `All ${industries.length} industry schedulers started.`,
+        message: `All ${agents.length} agent schedulers started.`,
       });
     }
 
-    const id = industryId ?? process.env.DEFAULT_INDUSTRY_ID ?? 'grocery';
-    const industry = await getIndustry(id);
-    if (!industry) {
-      return NextResponse.json({ error: `Industry "${id}" not found` }, { status: 404 });
+    const id = agentId ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
+    const agent = await getAgent(id);
+    if (!agent) {
+      return NextResponse.json({ error: `Agent "${id}" not found` }, { status: 404 });
     }
 
-    const personas = await getPersonas(industry);
-    if (!isSchedulerRunning(id)) startScheduler(personas, industry);
-    if (runNow) distributeSessionsForDay(personas, industry).catch(console.error);
+    const personas = await getPersonas(agent);
+    if (!isSchedulerRunning(id)) startScheduler(personas, agent);
+    if (runNow) distributeSessionsForDay(personas, agent).catch(console.error);
 
     return NextResponse.json({
       started: true,
-      industryId: id,
+      agentId: id,
       running: isSchedulerRunning(id),
-      nextRun: getNextRunTimeForIndustry(id),
+      nextRun: getNextRunTimeForAgent(id),
       message: runNow
-        ? `Scheduler started and immediate run triggered for ${industry.name}.`
-        : `Scheduler started for ${industry.name}.`,
+        ? `Scheduler started and immediate run triggered for ${agent.name}.`
+        : `Scheduler started for ${agent.name}.`,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

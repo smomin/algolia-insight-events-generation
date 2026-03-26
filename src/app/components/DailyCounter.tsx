@@ -5,7 +5,7 @@ import type { FlexIndex } from '@/types';
 import { useSSE } from '@/app/hooks/useSSE';
 
 interface DailyCounterProps {
-  industryId: string;
+  siteId: string;
   indices: FlexIndex[];
   eventLimit: number;
 }
@@ -33,12 +33,12 @@ function ProgressBar({ label, value, max }: { label: string; value: number; max:
   );
 }
 
-export default function DailyCounter({ industryId, indices, eventLimit }: DailyCounterProps) {
+export default function DailyCounter({ siteId, indices, eventLimit }: DailyCounterProps) {
   const [byIndex, setByIndex] = useState<Record<string, number>>({});
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // ── SSE — receive initial snapshot + live counter updates ────────────
-  const sseUrl = `/api/stream?industryId=${industryId}&types=counters`;
+  const sseUrl = `/api/stream?siteId=${siteId}&types=counters`;
 
   useSSE(sseUrl, ['counters'], (_, rawData) => {
     const data = rawData as { byIndex?: Record<string, number> };
@@ -51,7 +51,7 @@ export default function DailyCounter({ industryId, indices, eventLimit }: DailyC
   // ── Manual refresh (one-time REST fetch) ─────────────────────────────
   const fetchCounters = useCallback(async () => {
     try {
-      const res = await fetch(`/api/scheduler/status?industryId=${industryId}`);
+      const res = await fetch(`/api/scheduler/status?siteId=${siteId}`);
       if (res.ok) {
         const data = await res.json();
         if (data.counters?.byIndex) {
@@ -62,7 +62,7 @@ export default function DailyCounter({ industryId, indices, eventLimit }: DailyC
     } catch {
       /* ignore */
     }
-  }, [industryId]);
+  }, [siteId]);
 
   const totalEvents = Object.values(byIndex).reduce((s, n) => s + n, 0);
   const totalLimit = eventLimit * Math.max(indices.length, 1);

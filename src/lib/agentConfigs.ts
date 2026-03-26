@@ -1,9 +1,9 @@
-import type { IndustryV2, Persona } from '@/types';
+import type { AgentConfig, Persona } from '@/types';
 import {
-  getAllIndustryConfigs,
-  saveIndustryConfig,
-  deleteIndustryConfig,
-  getIndustryConfig,
+  getAllAgentConfigs,
+  saveAgentConfig,
+  deleteAgentConfig,
+  getAgentConfig,
 } from '@/lib/db';
 import { cbGet, cbUpsert } from '@/lib/couchbase';
 
@@ -17,47 +17,47 @@ export const DEFAULT_PROMPTS = {
 };
 
 // ─────────────────────────────────────────────
-// Industries — DB-first (Couchbase)
+// Agent configs — DB-first (Couchbase)
 // ─────────────────────────────────────────────
 
-export async function getAllIndustries(): Promise<IndustryV2[]> {
-  const configs = await getAllIndustryConfigs();
+export async function getAllAgents(): Promise<AgentConfig[]> {
+  const configs = await getAllAgentConfigs();
   return Object.values(configs).sort((a, b) => {
     if (a.isBuiltIn !== b.isBuiltIn) return a.isBuiltIn ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
 }
 
-export async function getIndustry(id: string): Promise<IndustryV2 | null> {
-  return getIndustryConfig(id);
+export async function getAgent(id: string): Promise<AgentConfig | null> {
+  return getAgentConfig(id);
 }
 
-export async function createIndustry(
-  config: Omit<IndustryV2, 'isBuiltIn' | 'createdAt' | 'updatedAt'>,
+export async function createAgent(
+  config: Omit<AgentConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'>,
   initialPersonas?: Persona[]
-): Promise<IndustryV2> {
+): Promise<AgentConfig> {
   const now = new Date().toISOString();
-  const full: IndustryV2 = { ...config, isBuiltIn: false, createdAt: now, updatedAt: now };
-  await saveIndustryConfig(full);
+  const full: AgentConfig = { ...config, isBuiltIn: false, createdAt: now, updatedAt: now };
+  await saveAgentConfig(full);
 
   if (initialPersonas) {
     await cbUpsert('personas', config.id, {
-      industryId: config.id,
-      personas: initialPersonas.map((p) => ({ ...p, industry: config.id })),
+      agentId: config.id,
+      personas: initialPersonas.map((p) => ({ ...p, agentId: config.id })),
     });
   }
 
   return full;
 }
 
-export async function updateIndustry(
+export async function updateAgent(
   id: string,
-  updates: Partial<Omit<IndustryV2, 'id' | 'isBuiltIn' | 'createdAt'>>
-): Promise<IndustryV2 | null> {
-  const existing = await getIndustryConfig(id);
+  updates: Partial<Omit<AgentConfig, 'id' | 'isBuiltIn' | 'createdAt'>>
+): Promise<AgentConfig | null> {
+  const existing = await getAgentConfig(id);
   if (!existing) return null;
 
-  const updated: IndustryV2 = {
+  const updated: AgentConfig = {
     ...existing,
     ...updates,
     id,
@@ -70,14 +70,14 @@ export async function updateIndustry(
   if (!updated.llmProviderId) delete updated.llmProviderId;
   if (!updated.algoliaAppConfigId) delete updated.algoliaAppConfigId;
 
-  await saveIndustryConfig(updated);
+  await saveAgentConfig(updated);
   return updated;
 }
 
-export async function removeIndustry(id: string): Promise<boolean> {
-  const cfg = await getIndustryConfig(id);
-  if (!cfg || cfg.isBuiltIn) return false;
-  await deleteIndustryConfig(id);
+export async function removeAgent(id: string): Promise<boolean> {
+  const cfg = await getAgentConfig(id);
+  if (!cfg) return false;
+  await deleteAgentConfig(id);
   return true;
 }
 
@@ -85,17 +85,17 @@ export async function removeIndustry(id: string): Promise<boolean> {
 // Personas — stored in `personas` collection
 // ─────────────────────────────────────────────
 
-export async function getPersonas(industry: IndustryV2): Promise<Persona[]> {
-  const doc = await cbGet<{ personas: Persona[] }>('personas', industry.id);
+export async function getPersonas(agent: AgentConfig): Promise<Persona[]> {
+  const doc = await cbGet<{ personas: Persona[] }>('personas', agent.id);
   return doc?.personas ?? [];
 }
 
 export async function savePersonas(
-  industryId: string,
+  agentId: string,
   personas: Persona[]
 ): Promise<void> {
-  const withIndustry = personas.map((p) => ({ ...p, industry: industryId }));
-  await cbUpsert('personas', industryId, { industryId, personas: withIndustry });
+  const withAgent = personas.map((p) => ({ ...p, agentId }));
+  await cbUpsert('personas', agentId, { agentId, personas: withAgent });
 }
 
 // ─────────────────────────────────────────────

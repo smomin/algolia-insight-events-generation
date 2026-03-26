@@ -4,11 +4,14 @@ import { getEventLog, clearEventLog } from '@/lib/db';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const industryId = searchParams.get('industryId') ?? process.env.DEFAULT_INDUSTRY_ID ?? 'grocery';
-    const log = await getEventLog(industryId);
+    const agentId = searchParams.get('agentId') ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
+    console.log(`[DEBUG:API/event-log] GET agentId="${agentId}" — calling getEventLog`);
+    const log = await getEventLog(agentId);
+    console.log(`[DEBUG:API/event-log] returning ${log.length} events for "${agentId}"`);
     return NextResponse.json({ events: log });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[DEBUG:API/event-log] ERROR:`, err);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
@@ -16,9 +19,9 @@ export async function GET(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const industryId = searchParams.get('industryId') ?? process.env.DEFAULT_INDUSTRY_ID ?? 'grocery';
-    await clearEventLog(industryId);
-    return NextResponse.json({ cleared: true, industryId });
+    const agentId = searchParams.get('agentId') ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
+    await clearEventLog(agentId);
+    return NextResponse.json({ cleared: true, agentId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });

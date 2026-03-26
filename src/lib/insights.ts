@@ -6,6 +6,10 @@ import type {
   IndexEvent,
 } from '@/types';
 import { resolveCredentials } from './appConfig';
+import { createLogger } from './logger';
+import { randomInt } from './utils';
+
+const log = createLogger('Insights');
 
 const INSIGHTS_ENDPOINT =
   process.env.ALGOLIA_INSIGHTS_URL ?? 'https://insights.algolia.io/1/events';
@@ -14,29 +18,48 @@ function randomFloat(min: number, max: number): number {
   return Math.round((Math.random() * (max - min) + min) * 100) / 100;
 }
 
-function randomInt(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
 
 export async function sendEvents(
   events: InsightEvent[],
-  industryId?: string
+  agentId?: string
 ): Promise<number> {
-  const creds = await resolveCredentials(industryId);
+  const creds = await resolveCredentials(agentId);
   if (!creds.algoliaAppId || !creds.algoliaSearchApiKey) {
-    console.error('[insights] sendEvents: missing Algolia credentials — set them in App Settings');
+    log.error('sendEvents: missing Algolia credentials — set them in App Settings', { agentId });
     return 401;
   }
-  const response = await fetch(INSIGHTS_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'X-Algolia-Application-Id': creds.algoliaAppId,
-      'X-Algolia-API-Key': creds.algoliaSearchApiKey,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ events }),
-  });
-  return response.status;
+
+  const eventSummary = events.map((e) => ({ type: e.eventType, name: e.eventName, index: e.index }));
+  log.debug('sendEvents', { agentId, eventCount: events.length, endpoint: INSIGHTS_ENDPOINT, events: eventSummary });
+
+  const start = Date.now();
+  try {
+    const response = await fetch(INSIGHTS_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'X-Algolia-Application-Id': creds.algoliaAppId,
+        'X-Algolia-API-Key': creds.algoliaSearchApiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ events }),
+    });
+
+    log.debug('sendEvents response', {
+      agentId,
+      status: response.status,
+      durationMs: Date.now() - start,
+    });
+
+    if (response.status !== 200) {
+      const body = await response.text().catch(() => '');
+      log.warn('sendEvents non-200 response', { agentId, status: response.status, body: body.slice(0, 200) });
+    }
+
+    return response.status;
+  } catch (err) {
+    log.error('sendEvents fetch failed', { agentId, error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -169,7 +192,7 @@ export function toSentEvents(
   events: InsightEvent[],
   status: number,
   meta?: {
-    industryId?: string;
+    agentId?: string;
     personaId?: string;
     personaName?: string;
     sessionId?: string;
@@ -184,63 +207,3 @@ export function toSentEvents(
   }));
 }
 
-// ─────────────────────────────────────────────
-// Legacy builders — kept for any remaining references
-// ─────────────────────────────────────────────
-
-export function buildPrimaryEvents(
-  persona: { userToken: string },
-  indexName: string,
-  objectID: string,
-  position: number,
-  queryID: string,
-  eventNames: { click: string; view: string; conversion: string }
-): InsightEvent[] {
-  return buildFlexIndexEvents(
-    persona,
-    {
-      id: 'primary',
-      label: '',
-      indexName,
-      role: 'primary',
-      events: [
-        { eventType: 'click', eventName: eventNames.click },
-        { eventType: 'view', eventName: eventNames.view },
-        { eventType: 'conversion', eventName: eventNames.conversion },
-      ],
-    },
-    { objectID },
-    position,
-    queryID,
-    []
-  );
-}
-
-export function buildSecondaryEvents(
-  persona: { userToken: string },
-  indexName: string,
-  products: CartProduct[],
-  eventNames: { click: string; view: string; addToCart: string; purchase: string }
-): InsightEvent[] {
-  const firstProduct = products[0] ?? { objectID: '', queryID: '' };
-  const primaryHit: { objectID: string } = firstProduct;
-  return buildFlexIndexEvents(
-    persona,
-    {
-      id: 'secondary',
-      label: '',
-      indexName,
-      role: 'secondary',
-      events: [
-        { eventType: 'click', eventName: eventNames.click },
-        { eventType: 'view', eventName: eventNames.view },
-        { eventType: 'conversion', eventSubtype: 'addToCart', eventName: eventNames.addToCart },
-        { eventType: 'conversion', eventSubtype: 'purchase', eventName: eventNames.purchase },
-      ],
-    },
-    primaryHit,
-    1,
-    firstProduct.queryID,
-    products
-  );
-}

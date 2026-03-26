@@ -21,8 +21,8 @@ interface SchedulerStatus {
 }
 
 interface SchedulerControlsProps {
-  industryId: string;
-  industryName: string;
+  siteId: string;
+  siteName: string;
   onStatusChange?: (status: SchedulerStatus) => void;
 }
 
@@ -36,8 +36,8 @@ const DEFAULT_STATUS: SchedulerStatus = {
 };
 
 export default function SchedulerControls({
-  industryId,
-  industryName,
+  siteId,
+  siteName,
   onStatusChange,
 }: SchedulerControlsProps) {
   const [status, setStatus] = useState<SchedulerStatus>(DEFAULT_STATUS);
@@ -51,7 +51,7 @@ export default function SchedulerControls({
   statusRef.current = status;
 
   // ── SSE — receive initial snapshot + live status updates ─────────────
-  const sseUrl = `/api/stream?industryId=${industryId}&types=status`;
+  const sseUrl = `/api/stream?siteId=${siteId}&types=status`;
 
   useSSE(sseUrl, ['status'], (_, rawData) => {
     const update = rawData as Partial<SchedulerStatus>;
@@ -105,7 +105,7 @@ export default function SchedulerControls({
   const post = async (body: Record<string, unknown>) => {
     setLoading(true);
     try {
-      await apiFetch('/api/scheduler/start', { ...body, industryId });
+      await apiFetch('/api/scheduler/start', { ...body, siteId });
       // SSE will push the status change automatically
     } finally {
       setLoading(false);
@@ -115,7 +115,7 @@ export default function SchedulerControls({
   const handleStop = async () => {
     setLoading(true);
     try {
-      await apiFetch('/api/scheduler/stop', { industryId });
+      await apiFetch('/api/scheduler/stop', { siteId });
     } finally {
       setLoading(false);
     }
@@ -124,7 +124,7 @@ export default function SchedulerControls({
   const handleRunAllPersonas = async () => {
     setLoading(true);
     try {
-      await apiFetch('/api/run-all', { industryId });
+      await apiFetch('/api/run-all', { siteId });
     } finally {
       setLoading(false);
     }
@@ -133,7 +133,7 @@ export default function SchedulerControls({
   const handleStopRun = async () => {
     setLoading(true);
     try {
-      await apiFetch('/api/scheduler/stop', { industryId, cancelOnly: true });
+      await apiFetch('/api/scheduler/stop', { siteId, cancelOnly: true });
     } finally {
       setLoading(false);
     }
@@ -147,7 +147,7 @@ export default function SchedulerControls({
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="text-lg font-semibold text-white">Scheduler</h2>
-          <p className="text-xs text-slate-500 mt-0.5">{industryName}</p>
+          <p className="text-xs text-slate-500 mt-0.5">{siteName}</p>
         </div>
         <div className="flex items-center gap-2">
           {status.isDistributing && (

@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { subscribeToStream, type SSEEventType } from '@/lib/sse';
+import { subscribeToStream, subscribeToDevReload, emitDevReload, type SSEEventType } from '@/lib/sse';
 import {
   getTodayCounters,
   getEventLog,
@@ -12,17 +12,34 @@ import {
   isSchedulerRunning,
   isDistributing,
   getCurrentRun,
-  getNextRunTimeForIndustry,
+  getNextRunTimeForAgent,
 } from '@/lib/scheduler';
-import { getAllIndustries, getEventLimit } from '@/lib/industries';
+import { getAllAgents, getEventLimit } from '@/lib/agentConfigs';
+import { getAgentState } from '@/lib/agents/WorkerAgent';
+import { getSupervisorStatus } from '@/lib/agents/SupervisorAgent';
+import { getGuardrailViolations } from '@/lib/agentDb';
 
 export const dynamic = 'force-dynamic';
 
-const VALID_TYPES = new Set<string>(['status', 'session', 'event-log', 'counters']);
+const VALID_TYPES = new Set<string>([
+  'status', 'session', 'event-log', 'counters',
+  'agent-status', 'guardrail', 'supervisor',
+]);
+
+// ── Dev-mode hot-reload detection ─────────────────────────────────────────
+if (process.env.NODE_ENV === 'development') {
+  const dg = globalThis as typeof globalThis & { _streamModuleVersion?: number };
+  dg._streamModuleVersion = (dg._streamModuleVersion ?? 0) + 1;
+  if (dg._streamModuleVersion > 1) {
+    setTimeout(() => emitDevReload(), 150);
+  }
+}
+
+const HEARTBEAT_MS = process.env.NODE_ENV === 'development' ? 3_000 : 25_000;
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const industryId = searchParams.get('industryId') ?? '';
+  const agentId = searchParams.get('siteId') ?? searchParams.get('agentId') ?? '';
   const typesParam = searchParams.get('types') ?? 'status';
   const types = typesParam
     .split(',')
@@ -30,7 +47,16 @@ export async function GET(req: NextRequest) {
 
   const encoder = new TextEncoder();
   let unsubscribe: (() => void) | undefined;
+  let unsubscribeReload: (() => void) | undefined;
   let heartbeatId: ReturnType<typeof setInterval> | undefined;
+
+  console.log(`[DEBUG:SSE] new connection — agentId="${agentId}" types=[${typesParam}] parsed=[${types.join(',')}]`);
+  if (!agentId) {
+    console.warn(`[DEBUG:SSE] agentId is empty — no initial snapshot will be sent and no live events will be received. Check that the client passes ?siteId= or ?agentId= in the SSE URL.`);
+  }
+  if (types.length === 0) {
+    console.warn(`[DEBUG:SSE] no valid types parsed from "${typesParam}" — valid types are: ${[...VALID_TYPES].join(', ')}`);
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -43,103 +69,192 @@ export async function GET(req: NextRequest) {
         }
       };
 
+      // Send an immediate comment line so the browser receives bytes right away
+      // and the EventSource transitions to OPEN state before the (potentially
+      // slow) initial DB snapshot runs. Without this, long-running DB queries
+      // can cause the browser to timeout the connection while still connecting.
+      controller.enqueue(encoder.encode(': connected\n\n'));
+
       // ── Initial snapshot ──────────────────────────────────────────────
-      try {
-        if (industryId === '_global') {
-          // Send the running state for ALL industries so page.tsx can populate
-          // the header status dots immediately on connect.
-          const industries = await getAllIndustries();
+      // Each DB call is individually guarded so a slow/unavailable collection
+      // cannot block the rest of the snapshot or the SSE connection itself.
+
+      // Multi-agent combined stream: one connection covers all agents.
+      // Events are tagged with agentId so the client can route them.
+      // All per-agent fetches run in parallel to avoid the O(n) sequential
+      // Couchbase round-trips that caused 57-second connection delays.
+      if (agentId === '_agents') {
+        const aidList = (searchParams.get('agentIds') ?? '').split(',').filter(Boolean);
+        await Promise.all(aidList.map(async (aid) => {
+          if (types.includes('agent-status')) {
+            send('agent-status', { ...getAgentState(aid), agentId: aid });
+          }
+          const [violations, sessions, events] = await Promise.all([
+            types.includes('guardrail')
+              ? getGuardrailViolations(aid).catch(() => [])
+              : Promise.resolve(null),
+            types.includes('session')
+              ? getSessions(aid).catch(() => [])
+              : Promise.resolve(null),
+            types.includes('event-log')
+              ? getEventLog(aid).catch(() => [])
+              : Promise.resolve(null),
+          ]);
+          if (violations !== null) {
+            send('guardrail', { agentId: aid, violations, initial: true });
+          }
+          if (sessions !== null) {
+            send('session', { agentId: aid, sessions, initial: true });
+          }
+          if (events !== null) {
+            send('event-log', { agentId: aid, events, initial: true });
+          }
+        }));
+      } else if (agentId === '_global') {
+        try {
+          const agents = await getAllAgents();
           const all: Record<string, { isRunning: boolean; isDistributing: boolean }> = {};
           await Promise.all(
-            industries.map(async (ind) => {
-              const distState = await getDistributionState(ind.id);
-              const inMemDist = isDistributing(ind.id);
-              // Auto-heal stale persisted state (same logic as per-industry snapshot)
-              let actualDist = inMemDist || distState.isDistributing;
-              if (!inMemDist && (distState.isDistributing || distState.cancelRequested)) {
-                await setDistributionActive(ind.id, distState.runId ?? 'stale', false);
-                actualDist = false;
+            agents.map(async (agent) => {
+              try {
+                const distState = await getDistributionState(agent.id);
+                const inMemDist = isDistributing(agent.id);
+                let actualDist = inMemDist || distState.isDistributing;
+                if (!inMemDist && (distState.isDistributing || distState.cancelRequested)) {
+                  await setDistributionActive(agent.id, distState.runId ?? 'stale', false);
+                  actualDist = false;
+                }
+                all[agent.id] = { isRunning: isSchedulerRunning(agent.id), isDistributing: actualDist };
+              } catch {
+                all[agent.id] = { isRunning: isSchedulerRunning(agent.id), isDistributing: false };
               }
-              all[ind.id] = {
-                isRunning: isSchedulerRunning(ind.id),
-                isDistributing: actualDist,
-              };
             })
           );
           send('status', { all });
-        } else if (industryId) {
-          // Send one snapshot per requested event type
-          for (const type of types) {
-            if (type === 'status') {
+        } catch { /* agents unavailable */ }
+      } else if (agentId) {
+        for (const type of types) {
+          if (type === 'status') {
+            try {
               const [lastRun, distState] = await Promise.all([
-                getLastSchedulerRun(industryId),
-                getDistributionState(industryId),
+                getLastSchedulerRun(agentId),
+                getDistributionState(agentId),
               ]);
-              const inMemDistributing = isDistributing(industryId);
-
-              // Auto-heal stale persisted state: if in-memory says the distribution
-              // is NOT running but Couchbase still claims it is (or has a dangling
-              // cancelRequested flag), the run ended uncleanly (hot-reload / crash).
-              // Clear the stale record so clients never get stuck in "Stopping…".
+              const inMemDistributing = isDistributing(agentId);
               let actuallyDistributing = inMemDistributing || distState.isDistributing;
               let cancelRequested = distState.cancelRequested;
               if (!inMemDistributing && (distState.isDistributing || distState.cancelRequested)) {
-                await setDistributionActive(industryId, distState.runId ?? 'stale', false);
+                await setDistributionActive(agentId, distState.runId ?? 'stale', false);
                 actuallyDistributing = false;
                 cancelRequested = false;
               }
-
-              const current = getCurrentRun(industryId);
+              const current = getCurrentRun(agentId);
               send('status', {
-                isRunning: isSchedulerRunning(industryId),
+                isRunning: isSchedulerRunning(agentId),
                 isDistributing: actuallyDistributing,
                 cancelRequested,
-                nextRun: getNextRunTimeForIndustry(industryId),
+                nextRun: getNextRunTimeForAgent(agentId),
                 lastRun,
                 currentRun: current
                   ? { sessionsCompleted: current.sessionsCompleted, errors: current.errors }
                   : null,
                 eventLimit: getEventLimit(),
               });
-            } else if (type === 'event-log') {
-              const events = await getEventLog(industryId);
-              // Mark as initial so the client replaces (not prepends) its local list
+            } catch { /* status unavailable */ }
+          } else if (type === 'event-log') {
+            try {
+              console.log(`[DEBUG:SSE] fetching initial event-log for agentId="${agentId}"`);
+              const events = await getEventLog(agentId);
+              console.log(`[DEBUG:SSE] sending initial event-log: ${events.length} events for "${agentId}"`);
               send('event-log', { events, initial: true });
-            } else if (type === 'session') {
-              const sessions = await getSessions(industryId);
-              send('session', { sessions, initial: true });
-            } else if (type === 'counters') {
-              const counters = await getTodayCounters(industryId);
-              send('counters', counters);
+            } catch (err) {
+              console.error(`[DEBUG:SSE] event-log initial snapshot failed for "${agentId}":`, err);
+              send('event-log', { events: [], initial: true });
             }
+          } else if (type === 'session') {
+            try {
+              console.log(`[DEBUG:SSE] fetching initial sessions for agentId="${agentId}"`);
+              const sessions = await getSessions(agentId);
+              console.log(`[DEBUG:SSE] sending initial sessions: ${sessions.length} records for "${agentId}"`);
+              send('session', { sessions, initial: true });
+            } catch (err) {
+              console.error(`[DEBUG:SSE] sessions initial snapshot failed for "${agentId}":`, err);
+              send('session', { sessions: [], initial: true });
+            }
+          } else if (type === 'counters') {
+            try {
+              const counters = await getTodayCounters(agentId);
+              send('counters', counters);
+            } catch { /* counters unavailable */ }
           }
         }
-      } catch {
-        // DB unavailable on connect — client will retry via EventSource reconnect
+      }
+
+      // ── Agent initial snapshots ──────────────────────────────────────
+      if (agentId && agentId !== '_global' && agentId !== '_supervisor' && agentId !== '_agents') {
+        if (types.includes('agent-status')) {
+          const agentState = getAgentState(agentId);
+          send('agent-status', agentState);
+        }
+        if (types.includes('guardrail')) {
+          const violations = await getGuardrailViolations(agentId).catch(() => []);
+          send('guardrail', { violations, initial: true });
+        }
+      }
+      if (agentId === '_supervisor') {
+        const supStatus = getSupervisorStatus();
+        send('supervisor', { ...supStatus, type: 'snapshot' });
       }
 
       // ── Subscribe to live updates ────────────────────────────────────
-      const channel = industryId === '_global' ? '_global' : industryId;
-      const listenTypes: SSEEventType[] =
-        industryId === '_global' ? ['status'] : types;
+      if (agentId === '_agents') {
+        const aidList = (searchParams.get('agentIds') ?? '').split(',').filter(Boolean);
+        const unsubs = aidList.map((aid) =>
+          subscribeToStream(aid, types, (type, data) => {
+            send(type, { agentId: aid, ...(data as object) });
+          })
+        );
+        unsubscribe = () => unsubs.forEach((u) => u());
+      } else {
+        const channel =
+          agentId === '_global'
+            ? '_global'
+            : agentId === '_supervisor'
+            ? '_supervisor'
+            : agentId;
+        const listenTypes: SSEEventType[] =
+          agentId === '_global'
+            ? ['status']
+            : agentId === '_supervisor'
+            ? ['supervisor']
+            : types;
 
-      unsubscribe = subscribeToStream(channel, listenTypes, (type, data) => {
-        send(type, data);
-      });
+        unsubscribe = subscribeToStream(channel, listenTypes, (type, data) => {
+          send(type, data);
+        });
+      }
 
-      // ── Heartbeat — keeps the connection alive through proxies ───────
+      // ── Dev live-reload ─────────────────────────────────────────────
+      if (process.env.NODE_ENV === 'development') {
+        unsubscribeReload = subscribeToDevReload(({ timestamp }) => {
+          send('reload', { timestamp });
+        });
+      }
+
+      // ── Heartbeat ────────────────────────────────────────────────────
       heartbeatId = setInterval(() => {
         try {
           controller.enqueue(encoder.encode(': heartbeat\n\n'));
         } catch {
           /* already closed */
         }
-      }, 25_000);
+      }, HEARTBEAT_MS);
     },
 
     cancel() {
       clearInterval(heartbeatId);
       unsubscribe?.();
+      unsubscribeReload?.();
     },
   });
 

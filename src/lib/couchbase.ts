@@ -12,12 +12,13 @@
  * Scope  : _default
  * Collections:
  *   appConfig         — single doc (key = "_config")  global app credentials
- *   industryConfigs   — one doc per industry  (key = industryId)
- *   personas          — one doc per industry  (key = industryId)
- *   counters          — one doc per industry  (key = industryId)
- *   eventLogs         — one doc per industry  (key = industryId)
- *   schedulerRuns     — one doc per industry  (key = industryId)
- *   sessions          — one doc per industry  (key = industryId)
+ *   siteConfigs       — one doc per site  (key = siteId)
+ *   personas          — one doc per site  (key = siteId)
+ *   counters          — one doc per site  (key = siteId)
+ *   eventLogs         — one doc per site  (key = siteId)
+ *   schedulerRuns     — one doc per site  (key = siteId)
+ *   sessions          — one doc per site  (key = siteId)
+ *   agentData         — agent system: guardrail logs, supervisor decisions
  */
 
 import {
@@ -27,6 +28,7 @@ import {
   DocumentNotFoundError,
   BucketType,
 } from 'couchbase';
+import { createLogger } from './logger';
 
 // ─────────────────────────────────────────────
 // Config
@@ -37,28 +39,51 @@ const SCOPE_NAME = '_default';
 
 export const COLLECTIONS = [
   'appConfig',
-  'industryConfigs',
+  'siteConfigs',
   'personas',
   'counters',
   'eventLogs',
   'schedulerRuns',
   'sessions',
+  'agentData',
 ] as const;
 
 export type CollectionName = (typeof COLLECTIONS)[number];
 
 // ─────────────────────────────────────────────
-// Singleton connection
+// Singleton connection — module-level so each Next.js module compilation
+// gets its own connection. Multiple connections to the same Couchbase bucket
+// are harmless; they share data at the server level.
+// (Do NOT move this to globalThis: a hot-reload would replace the module but
+// leave the old in-flight initCluster() promise on globalThis, causing all
+// subsequent cbGet/cbUpsert calls to hang forever.)
 // ─────────────────────────────────────────────
 
 let _initPromise: Promise<Cluster> | null = null;
+
+// Cache Collection objects so we don't traverse bucket→scope→collection on
+// every read/write. Cleared when the cluster connection fails so reconnects
+// get fresh handles.
+const _collections = new Map<CollectionName, Collection>();
 
 async function initCluster(): Promise<Cluster> {
   const url = process.env.COUCHBASE_URL ?? 'couchbase://localhost';
   const username = process.env.COUCHBASE_USERNAME ?? 'Administrator';
   const password = process.env.COUCHBASE_PASSWORD ?? 'password';
 
-  const cluster = await connect(url, { username, password });
+  const cluster = await connect(url, {
+    username,
+    password,
+    timeouts: {
+      connectTimeout: 10_000,
+      kvTimeout: 10_000,
+      managementTimeout: 15_000,
+      queryTimeout: 10_000,
+      viewTimeout: 10_000,
+      searchTimeout: 10_000,
+      analyticsTimeout: 10_000,
+    },
+  });
 
   // ── Ensure bucket exists ──
   const bucketMgr = cluster.buckets();
@@ -86,14 +111,15 @@ async function initCluster(): Promise<Cluster> {
     }
   }
 
-  console.log(`[Couchbase] Connected. Bucket: "${BUCKET_NAME}"`);
+  createLogger('Couchbase').info(`connected`, { bucket: BUCKET_NAME });
   return cluster;
 }
 
 function getCluster(): Promise<Cluster> {
   if (!_initPromise) {
     _initPromise = initCluster().catch((err) => {
-      _initPromise = null; // reset so we retry on next call
+      _initPromise = null;
+      _collections.clear(); // drop cached handles so the next attempt gets fresh ones
       throw err;
     });
   }
@@ -105,8 +131,12 @@ function getCluster(): Promise<Cluster> {
 // ─────────────────────────────────────────────
 
 export async function getCollection(name: CollectionName): Promise<Collection> {
+  const cached = _collections.get(name);
+  if (cached) return cached;
   const cluster = await getCluster();
-  return cluster.bucket(BUCKET_NAME).scope(SCOPE_NAME).collection(name);
+  const coll = cluster.bucket(BUCKET_NAME).scope(SCOPE_NAME).collection(name);
+  _collections.set(name, coll);
+  return coll;
 }
 
 /** Get a document; returns null if it does not exist. */

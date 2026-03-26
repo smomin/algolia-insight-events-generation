@@ -1,21 +1,47 @@
 import type { Persona } from '@/types';
 import type { AlgoliaHit } from '@/lib/algolia';
 import { callLLM } from './llm';
+import { createLogger } from './logger';
+
+const log = createLogger('Anthropic');
+
+function generateNumericToken(): string {
+  // Generate a 38-digit numeric user token — large enough to be globally unique per persona/site
+  return Array.from({ length: 38 }, () => Math.floor(Math.random() * 10)).join('');
+}
 
 // ─────────────────────────────────────────────
-// Generic functions — driven by industry prompts
+// Generic functions — driven by site prompts
 // ─────────────────────────────────────────────
 
 export async function generatePrimaryQuery(
   persona: Persona,
   promptInstruction: string,
-  industryId?: string
+  siteId?: string,
+  recentQueries?: string[]
 ): Promise<string> {
-  return callLLM(
-    [{ role: 'user', content: `Persona:\n${JSON.stringify(persona, null, 2)}` }],
+  log.debug('generatePrimaryQuery', {
+    persona: persona.name,
+    siteId,
+    recentQueryCount: recentQueries?.length ?? 0,
+  });
+
+  let userContent = `Persona:\n${JSON.stringify(persona, null, 2)}`;
+
+  if (recentQueries && recentQueries.length > 0) {
+    userContent +=
+      `\n\nThis persona's recent searches (avoid repeating these or close variants — generate something distinctly different to ensure variety):\n` +
+      recentQueries.map((q) => `- "${q}"`).join('\n');
+  }
+
+  const query = await callLLM(
+    [{ role: 'user', content: userContent }],
     { systemPrompt: promptInstruction, maxTokens: 100 },
-    industryId
+    siteId
   );
+
+  log.debug('generatePrimaryQuery result', { persona: persona.name, query });
+  return query;
 }
 
 // ─────────────────────────────────────────────
@@ -61,8 +87,10 @@ export async function selectBestResult(
   persona: Persona,
   hits: AlgoliaHit[],
   promptInstruction: string,
-  industryId?: string
+  siteId?: string
 ): Promise<{ index: number; reason: string }> {
+  log.debug('selectBestResult', { persona: persona.name, hitCount: hits.length, siteId });
+
   const resultList = hits.map((h, i) => ({ index: i, ...summarizeHit(h) }));
 
   const text = await callLLM(
@@ -73,7 +101,7 @@ export async function selectBestResult(
       },
     ],
     { systemPrompt: promptInstruction, maxTokens: 200 },
-    industryId
+    siteId
   );
 
   const cleaned = text
@@ -87,8 +115,10 @@ export async function selectBestResult(
     const idx = Number.isFinite(numIdx)
       ? Math.max(0, Math.min(Math.floor(numIdx), hits.length - 1))
       : 0;
+    log.debug('selectBestResult chosen', { persona: persona.name, selectedIndex: idx, reason: parsed?.reason });
     return { index: idx, reason: parsed?.reason ?? 'Auto-selected result' };
-  } catch {
+  } catch (err) {
+    log.warn('selectBestResult JSON parse failed, defaulting to index 0', { persona: persona.name, raw: text.slice(0, 100), error: err instanceof Error ? err.message : String(err) });
     return { index: 0, reason: 'Auto-selected first result' };
   }
 }
@@ -97,9 +127,15 @@ export async function generateSecondaryQueries(
   primaryHit: AlgoliaHit,
   persona: Persona,
   promptInstruction: string,
-  industryId?: string,
+  siteId?: string,
   secondaryIndices?: Array<{ id: string; label: string }>
 ): Promise<string[]> {
+  log.debug('generateSecondaryQueries', {
+    persona: persona.name,
+    primaryObjectID: primaryHit.objectID,
+    secondaryIndices: secondaryIndices?.map((s) => s.label),
+    siteId,
+  });
   const hitSummary = summarizeHit(primaryHit);
 
   const indexHint =
@@ -115,7 +151,7 @@ export async function generateSecondaryQueries(
       },
     ],
     { systemPrompt: promptInstruction, maxTokens: 300 },
-    industryId
+    siteId
   );
 
   const cleaned = raw
@@ -126,11 +162,14 @@ export async function generateSecondaryQueries(
     const parsed = JSON.parse(cleaned) as string[];
     if (!Array.isArray(parsed) || parsed.length === 0)
       throw new Error('Invalid response');
-    return parsed
-      .slice(0, 5)
-      .map((q) => String(q).trim())
-      .filter(Boolean);
-  } catch {
+    const queries = parsed.slice(0, 5).map((q) => String(q).trim()).filter(Boolean);
+    log.debug('generateSecondaryQueries result', { persona: persona.name, queries });
+    return queries;
+  } catch (err) {
+    log.warn('generateSecondaryQueries JSON parse failed, falling back to objectID', {
+      persona: persona.name,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [primaryHit.objectID];
   }
 }
@@ -146,12 +185,12 @@ export interface IndexSample {
   sampleRecords: AlgoliaHit[];
 }
 
-export async function generatePersonasForIndustry(
-  industryName: string,
+export async function generatePersonasForSite(
+  siteName: string,
   indexSamples: IndexSample[],
   count: number,
   existingPersonaNames: string[],
-  industryId?: string,
+  siteId?: string,
   llmProviderIdOverride?: string
 ): Promise<Persona[]> {
   const indexContext = indexSamples.map(({ label, role, sampleRecords }) => {
@@ -196,29 +235,29 @@ export async function generatePersonasForIndustry(
 
   const systemPrompt = `You are a UX research expert generating realistic synthetic user personas for an e-commerce and search analytics simulation system.
 
-You will be given information about an industry and sample records from its Algolia search indices. Generate ${count} diverse, realistic personas who would realistically search and interact with this content.
+You will be given information about a site and sample records from its Algolia search indices. Generate ${count} diverse, realistic personas who would realistically search and interact with this content.
 
 Return ONLY a valid JSON array. No markdown, no code fences, no explanation. Each persona object must have exactly these fields:
 - "id": unique kebab-case slug (e.g. "budget-conscious-traveler-1")
 - "name": realistic full name
-- "userToken": "gen-" followed by a unique 8-char alphanumeric string
+- "userToken": a unique 38-digit numeric string (e.g. "47209780137068115507257169452385809809") — digits only, no letters or dashes
 - "description": 1-2 sentence personality and usage description (specific to the content)
 - "skill": one of "beginner", "intermediate", "advanced"
 - "budget": one of "low", "medium", "high"
 - "tags": array of 3-5 relevant strings (interests, preferences, behaviors)
-- any 2-4 additional domain-specific fields relevant to this industry (e.g. travelStyle, investmentGoal, fitnessLevel — choose field names that make sense)
+- any 2-4 additional domain-specific fields relevant to this site (e.g. travelStyle, investmentGoal, fitnessLevel — choose field names that make sense)
 
 Personas must be diverse across skill level, budget, age groups, and use cases. Make them feel like real, distinct people.${avoidNames}`;
 
-  const userMessage = `Industry: ${industryName}
+  const userMessage = `Site: ${siteName}
 
 Sample data from configured indices:
-${indexContext || 'No sample records available — generate plausible personas based on the industry name alone.'}`;
+${indexContext || 'No sample records available — generate plausible personas based on the site name alone.'}`;
 
   const raw = await callLLM(
     [{ role: 'user', content: userMessage }],
     { systemPrompt, maxTokens: 4000, providerIdOverride: llmProviderIdOverride },
-    industryId
+    siteId
   );
 
   const cleaned = raw
@@ -231,6 +270,6 @@ ${indexContext || 'No sample records available — generate plausible personas b
   return parsed.map((p, i) => ({
     ...p,
     id: p.id || `generated-persona-${Date.now()}-${i}`,
-    userToken: p.userToken || `gen-${Math.random().toString(36).slice(2, 10)}`,
+    userToken: /^\d{10,}$/.test(p.userToken ?? '') ? p.userToken : generateNumericToken(),
   }));
 }

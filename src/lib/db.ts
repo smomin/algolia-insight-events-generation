@@ -1,8 +1,11 @@
 import { cbGet, cbUpsert, cbDelete, cbGetIndex, cbAddToIndex, cbRemoveFromIndex } from '@/lib/couchbase';
-import { emitToIndustry } from '@/lib/sse';
+import { emitToAgent } from '@/lib/sse';
+
+// Module-level constant so the env var is parsed once at startup.
+const DAILY_LIMIT = parseInt(process.env.DAILY_EVENT_LIMIT_PER_INDEX ?? '1000', 10);
 import type {
-  IndustryV2,
-  IndustryCounters,
+  AgentConfig,
+  AgentCounters,
   SentEvent,
   SchedulerRun,
   SessionRecord,
@@ -17,79 +20,81 @@ function getToday(): string {
 }
 
 // ─────────────────────────────────────────────
-// Industry config CRUD
+// Agent config CRUD
+// Note: Couchbase collection key kept as 'siteConfigs' for data compatibility.
 // ─────────────────────────────────────────────
 
-export async function getAllIndustryConfigs(): Promise<Record<string, IndustryV2>> {
-  const keys = await cbGetIndex('industryConfigs');
+export async function getAllAgentConfigs(): Promise<Record<string, AgentConfig>> {
+  const keys = await cbGetIndex('siteConfigs');
   const entries = await Promise.all(
     keys.map(async (id) => {
-      const cfg = await cbGet<IndustryV2>('industryConfigs', id);
+      const cfg = await cbGet<AgentConfig>('siteConfigs', id);
       return cfg ? ([id, cfg] as const) : null;
     })
   );
   return Object.fromEntries(
-    entries.filter((e): e is [string, IndustryV2] => e !== null)
+    entries.filter((e): e is [string, AgentConfig] => e !== null)
   );
 }
 
-export async function getIndustryConfig(id: string): Promise<IndustryV2 | null> {
-  return cbGet<IndustryV2>('industryConfigs', id);
+export async function getAgentConfig(id: string): Promise<AgentConfig | null> {
+  return cbGet<AgentConfig>('siteConfigs', id);
 }
 
-export async function saveIndustryConfig(config: IndustryV2): Promise<void> {
-  await cbUpsert('industryConfigs', config.id, {
+export async function saveAgentConfig(config: AgentConfig): Promise<void> {
+  await cbUpsert('siteConfigs', config.id, {
     ...config,
     updatedAt: new Date().toISOString(),
   });
-  await cbAddToIndex('industryConfigs', config.id);
+  await cbAddToIndex('siteConfigs', config.id);
 }
 
-export async function deleteIndustryConfig(id: string): Promise<void> {
-  await cbDelete('industryConfigs', id);
-  await cbRemoveFromIndex('industryConfigs', id);
+export async function deleteAgentConfig(id: string): Promise<void> {
+  await cbDelete('siteConfigs', id);
+  await cbRemoveFromIndex('siteConfigs', id);
 }
 
 // ─────────────────────────────────────────────
-// Counters (N-index, per industry)
+// Counters (N-index, per agent)
 // ─────────────────────────────────────────────
 
-async function readCounters(industryId: string): Promise<IndustryCounters> {
-  const doc = await cbGet<IndustryCounters>('counters', industryId);
+async function readCounters(agentId: string): Promise<AgentCounters> {
+  const doc = await cbGet<AgentCounters>('counters', agentId);
   return doc ?? { date: getToday(), byIndex: {} };
 }
 
-export async function resetCountersIfNewDay(industryId: string): Promise<void> {
-  const counters = await readCounters(industryId);
+export async function getTodayCounters(agentId: string): Promise<AgentCounters> {
+  const counters = await readCounters(agentId);
   if (counters.date !== getToday()) {
-    await cbUpsert('counters', industryId, { date: getToday(), byIndex: {} });
+    const fresh: AgentCounters = { date: getToday(), byIndex: {} };
+    await cbUpsert('counters', agentId, fresh);
+    return fresh;
   }
+  return counters;
 }
 
-export async function getTodayCounters(industryId: string): Promise<IndustryCounters> {
-  await resetCountersIfNewDay(industryId);
-  return readCounters(industryId);
+/** Ensures counters are for today. Delegates to getTodayCounters. */
+export async function resetCountersIfNewDay(agentId: string): Promise<void> {
+  await getTodayCounters(agentId);
 }
 
 export async function incrementIndexCounter(
-  industryId: string,
+  agentId: string,
   indexId: string,
   amount: number
 ): Promise<void> {
-  const counters = await getTodayCounters(industryId);
+  const counters = await getTodayCounters(agentId);
   counters.byIndex[indexId] = (counters.byIndex[indexId] ?? 0) + amount;
-  await cbUpsert('counters', industryId, counters);
-  emitToIndustry(industryId, 'counters', counters);
+  await cbUpsert('counters', agentId, counters);
+  emitToAgent(agentId, 'counters', counters);
 }
 
 export async function getRemainingBudget(
-  industryId: string,
+  agentId: string,
   indexId: string
 ): Promise<number> {
-  await resetCountersIfNewDay(industryId);
-  const counters = await readCounters(industryId);
-  const limit = parseInt(process.env.DAILY_EVENT_LIMIT_PER_INDEX ?? '1000', 10);
-  return Math.max(0, limit - (counters.byIndex[indexId] ?? 0));
+  const counters = await getTodayCounters(agentId);
+  return Math.max(0, DAILY_LIMIT - (counters.byIndex[indexId] ?? 0));
 }
 
 // ─────────────────────────────────────────────
@@ -97,25 +102,31 @@ export async function getRemainingBudget(
 // ─────────────────────────────────────────────
 
 export async function appendEventLog(
-  industryId: string,
+  agentId: string,
   events: SentEvent[]
 ): Promise<void> {
-  const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', industryId);
+  const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', agentId);
   const existing = doc?.events ?? [];
   const updated = [...existing, ...events].slice(-MAX_EVENT_LOG);
-  await cbUpsert('eventLogs', industryId, { events: updated });
-  // Push only the newly-added batch; clients prepend these to their local list
-  emitToIndustry(industryId, 'event-log', { events });
+  await cbUpsert('eventLogs', agentId, { events: updated });
+  emitToAgent(agentId, 'event-log', { events });
 }
 
-export async function getEventLog(industryId: string): Promise<SentEvent[]> {
-  const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', industryId);
-  return (doc?.events ?? []).slice().reverse();
+export async function getEventLog(agentId: string): Promise<SentEvent[]> {
+  console.debug(`[DB:getEventLog] querying collection=eventLogs key="${agentId}"`);
+  const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', agentId);
+  if (!doc) {
+    console.debug(`[DB:getEventLog] document not found for key="${agentId}" — returning []`);
+    return [];
+  }
+  const count = doc.events?.length ?? 0;
+  console.debug(`[DB:getEventLog] found ${count} events for key="${agentId}"`);
+  return (doc.events ?? []).slice().reverse();
 }
 
-export async function clearEventLog(industryId: string): Promise<void> {
-  await cbUpsert('eventLogs', industryId, { events: [] });
-  emitToIndustry(industryId, 'event-log', { events: [], cleared: true });
+export async function clearEventLog(agentId: string): Promise<void> {
+  await cbUpsert('eventLogs', agentId, { events: [] });
+  emitToAgent(agentId, 'event-log', { events: [], cleared: true });
 }
 
 // ─────────────────────────────────────────────
@@ -123,23 +134,23 @@ export async function clearEventLog(industryId: string): Promise<void> {
 // ─────────────────────────────────────────────
 
 export async function appendSchedulerRun(
-  industryId: string,
+  agentId: string,
   run: SchedulerRun
 ): Promise<void> {
-  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', industryId);
+  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', agentId);
   const runs = [run, ...(doc?.runs ?? [])].slice(0, MAX_SCHEDULER_RUNS);
-  await cbUpsert('schedulerRuns', industryId, { runs });
+  await cbUpsert('schedulerRuns', agentId, { runs });
 }
 
 export async function getLastSchedulerRun(
-  industryId: string
+  agentId: string
 ): Promise<SchedulerRun | null> {
-  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', industryId);
+  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', agentId);
   return doc?.runs[0] ?? null;
 }
 
-export async function getSchedulerRuns(industryId: string): Promise<SchedulerRun[]> {
-  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', industryId);
+export async function getSchedulerRuns(agentId: string): Promise<SchedulerRun[]> {
+  const doc = await cbGet<{ runs: SchedulerRun[] }>('schedulerRuns', agentId);
   return doc?.runs ?? [];
 }
 
@@ -148,24 +159,30 @@ export async function getSchedulerRuns(industryId: string): Promise<SchedulerRun
 // ─────────────────────────────────────────────
 
 export async function appendSession(
-  industryId: string,
+  agentId: string,
   session: SessionRecord
 ): Promise<void> {
-  const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', industryId);
+  const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', agentId);
   const sessions = [session, ...(doc?.sessions ?? [])].slice(0, MAX_SESSIONS);
-  await cbUpsert('sessions', industryId, { sessions });
-  // Push only the single new record; clients prepend it to their local list
-  emitToIndustry(industryId, 'session', { session });
+  await cbUpsert('sessions', agentId, { sessions });
+  emitToAgent(agentId, 'session', { session });
 }
 
-export async function getSessions(industryId: string): Promise<SessionRecord[]> {
-  const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', industryId);
-  return doc?.sessions ?? [];
+export async function getSessions(agentId: string): Promise<SessionRecord[]> {
+  console.debug(`[DB:getSessions] querying collection=sessions key="${agentId}"`);
+  const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', agentId);
+  if (!doc) {
+    console.debug(`[DB:getSessions] document not found for key="${agentId}" — returning []`);
+    return [];
+  }
+  const count = doc.sessions?.length ?? 0;
+  console.debug(`[DB:getSessions] found ${count} sessions for key="${agentId}"`);
+  return doc.sessions ?? [];
 }
 
-export async function clearSessions(industryId: string): Promise<void> {
-  await cbUpsert('sessions', industryId, { sessions: [] });
-  emitToIndustry(industryId, 'session', { sessions: [], cleared: true });
+export async function clearSessions(agentId: string): Promise<void> {
+  await cbUpsert('sessions', agentId, { sessions: [] });
+  emitToAgent(agentId, 'session', { sessions: [], cleared: true });
 }
 
 // ─────────────────────────────────────────────
@@ -179,28 +196,146 @@ export interface DistributionState {
   cancelRequested: boolean;
 }
 
-export async function getDistributionState(industryId: string): Promise<DistributionState> {
-  const doc = await cbGet<DistributionState>('counters', `${industryId}_dist`);
+export async function getDistributionState(agentId: string): Promise<DistributionState> {
+  const doc = await cbGet<DistributionState>('counters', `${agentId}_dist`);
   return doc ?? { isDistributing: false, cancelRequested: false };
 }
 
 export async function setDistributionActive(
-  industryId: string,
+  agentId: string,
   runId: string,
   active: boolean
 ): Promise<void> {
-  const current = await getDistributionState(industryId);
-  await cbUpsert('counters', `${industryId}_dist`, {
+  const current = await getDistributionState(agentId);
+  await cbUpsert('counters', `${agentId}_dist`, {
     isDistributing: active,
     runId: active ? runId : current.runId,
     startedAt: active ? new Date().toISOString() : current.startedAt,
-    // Always clear cancelRequested when deactivating so a previous stop
-    // request never bleeds into the next run or causes a stuck "Stopping…" state.
-    cancelRequested: active ? false : false,
+    cancelRequested: active ? current.cancelRequested : false,
   });
 }
 
-export async function setDistributionCancelRequested(industryId: string): Promise<void> {
-  const current = await getDistributionState(industryId);
-  await cbUpsert('counters', `${industryId}_dist`, { ...current, cancelRequested: true });
+export async function setDistributionCancelRequested(agentId: string): Promise<void> {
+  const current = await getDistributionState(agentId);
+  await cbUpsert('counters', `${agentId}_dist`, { ...current, cancelRequested: true });
+}
+
+// ─────────────────────────────────────────────
+// Persona query memory — per-persona search history
+// Persisted so agents never repeat the same queries across sessions.
+// ─────────────────────────────────────────────
+
+const MAX_PERSONA_MEMORY = 30;
+// Queries older than this many days are pruned to keep memory fresh.
+const MEMORY_MAX_AGE_DAYS = 14;
+
+interface PersonaMemoryEntry {
+  query: string;
+  timestamp: string; // ISO-8601
+}
+
+interface PersonaMemoryDoc {
+  entries: PersonaMemoryEntry[];
+}
+
+function memoryKey(agentId: string, personaId: string): string {
+  return `persona_mem_${agentId}_${personaId}`;
+}
+
+/**
+ * Returns the last N approved queries for a persona, newest-first.
+ * Prunes entries older than MEMORY_MAX_AGE_DAYS automatically.
+ */
+export async function getPersonaQueryMemory(
+  agentId: string,
+  personaId: string
+): Promise<string[]> {
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', memoryKey(agentId, personaId));
+  if (!doc?.entries?.length) return [];
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - MEMORY_MAX_AGE_DAYS);
+
+  return doc.entries
+    .filter((e) => new Date(e.timestamp) >= cutoff)
+    .map((e) => e.query);
+}
+
+/**
+ * Appends a successfully-approved query to the persona's memory, deduplicating
+ * and capping at MAX_PERSONA_MEMORY entries.
+ */
+export async function appendPersonaQuery(
+  agentId: string,
+  personaId: string,
+  query: string
+): Promise<void> {
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', memoryKey(agentId, personaId));
+  const existing = doc?.entries ?? [];
+
+  const deduped = existing.filter(
+    (e) => e.query.toLowerCase() !== query.toLowerCase()
+  );
+
+  const updated: PersonaMemoryEntry[] = [
+    { query, timestamp: new Date().toISOString() },
+    ...deduped,
+  ].slice(0, MAX_PERSONA_MEMORY);
+
+  await cbUpsert('agentData', memoryKey(agentId, personaId), { entries: updated });
+}
+
+// ─────────────────────────────────────────────
+// Per-index persona query memory
+// Scoped to agentId + personaId + indexId so each IndexAgent maintains its
+// own search history independently of other indices on the same agent.
+// ─────────────────────────────────────────────
+
+function indexMemoryKey(agentId: string, personaId: string, indexId: string): string {
+  return `persona_mem_${agentId}_${personaId}_idx_${indexId}`;
+}
+
+/**
+ * Returns the last N approved queries for a persona on a specific index,
+ * newest-first. Prunes entries older than MEMORY_MAX_AGE_DAYS automatically.
+ */
+export async function getIndexQueryMemory(
+  agentId: string,
+  personaId: string,
+  indexId: string
+): Promise<string[]> {
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', indexMemoryKey(agentId, personaId, indexId));
+  if (!doc?.entries?.length) return [];
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - MEMORY_MAX_AGE_DAYS);
+
+  return doc.entries
+    .filter((e) => new Date(e.timestamp) >= cutoff)
+    .map((e) => e.query);
+}
+
+/**
+ * Appends a successfully-approved query to the per-index persona memory,
+ * deduplicating and capping at MAX_PERSONA_MEMORY entries.
+ */
+export async function appendIndexQuery(
+  agentId: string,
+  personaId: string,
+  indexId: string,
+  query: string
+): Promise<void> {
+  const doc = await cbGet<PersonaMemoryDoc>('agentData', indexMemoryKey(agentId, personaId, indexId));
+  const existing = doc?.entries ?? [];
+
+  const deduped = existing.filter(
+    (e) => e.query.toLowerCase() !== query.toLowerCase()
+  );
+
+  const updated: PersonaMemoryEntry[] = [
+    { query, timestamp: new Date().toISOString() },
+    ...deduped,
+  ].slice(0, MAX_PERSONA_MEMORY);
+
+  await cbUpsert('agentData', indexMemoryKey(agentId, personaId, indexId), { entries: updated });
 }
