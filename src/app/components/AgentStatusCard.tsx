@@ -26,6 +26,7 @@ interface Props {
   indices?: FlexIndex[];
   siteUrl?: string;
   expanded?: boolean;
+  systemActive?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
   onViewDetails?: () => void;
@@ -75,6 +76,13 @@ const BAR_COLOR: Record<string, string> = {
   indigo: 'bg-indigo-500', lime: 'bg-lime-500', red: 'bg-red-500',
 };
 
+const ACTIVE_BORDER: Record<string, string> = {
+  blue: 'border-blue-600/70', emerald: 'border-emerald-600/70', rose: 'border-rose-600/70',
+  amber: 'border-amber-600/70', violet: 'border-violet-600/70', cyan: 'border-cyan-600/70',
+  orange: 'border-orange-600/70', pink: 'border-pink-600/70', teal: 'border-teal-600/70',
+  indigo: 'border-indigo-600/70', lime: 'border-lime-600/70', red: 'border-red-600/70',
+};
+
 export default function AgentStatusCard({
   siteName,
   siteIcon,
@@ -87,6 +95,7 @@ export default function AgentStatusCard({
   indices,
   siteUrl,
   expanded,
+  systemActive,
   onEdit,
   onDelete,
   onViewDetails,
@@ -103,10 +112,25 @@ export default function AgentStatusCard({
   const isPulsing = PHASE_PULSE[state.phase];
   const barColor = BAR_COLOR[siteColor] ?? 'bg-blue-500';
   const accentColor = ACCENT[siteColor] ?? 'text-blue-400';
+  const activeBorder = ACTIVE_BORDER[siteColor] ?? 'border-violet-600/70';
+  const isWorking = state.isActive && state.phase !== 'idle' && state.phase !== 'complete' && state.phase !== 'error';
+  // Three-state model:
+  //  • isWorking     → agent is mid-batch right now
+  //  • systemActive  → supervisor is running; agent is enrolled (between dispatches)
+  //  • otherwise     → system is off / standby
+  const statusBadge = isWorking
+    ? { label: 'Running', dot: 'bg-emerald-400 animate-pulse', pill: 'text-emerald-300 bg-emerald-900/40 border-emerald-700/60' }
+    : systemActive
+    ? { label: 'Scheduled', dot: 'bg-violet-400', pill: 'text-violet-300 bg-violet-900/30 border-violet-700/50' }
+    : { label: 'Standby', dot: 'bg-slate-600', pill: 'text-slate-500 bg-slate-800/60 border-slate-700/50' };
 
   return (
     <div className={`bg-slate-800/60 border rounded-xl p-4 flex flex-col gap-3 transition-all ${
-      state.isActive ? 'border-slate-600 shadow-lg shadow-slate-900/50' : 'border-slate-700'
+      state.isActive
+        ? `${activeBorder} shadow-lg shadow-slate-900/50`
+        : systemActive
+        ? 'border-violet-900/50'
+        : 'border-slate-700'
     }`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
@@ -150,9 +174,12 @@ export default function AgentStatusCard({
                 </button>
               )}
             </div>
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              {state.isActive ? 'Agent active' : 'Agent standby'}
-            </p>
+            <div className="mt-0.5">
+              <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${statusBadge.pill}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${statusBadge.dot}`} />
+                {statusBadge.label}
+              </span>
+            </div>
           </div>
         </div>
         {/* Phase badge */}

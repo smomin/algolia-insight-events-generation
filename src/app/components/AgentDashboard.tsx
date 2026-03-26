@@ -63,6 +63,13 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     startedAt?: string;
     lastRunAt?: string;
   }>({ isRunning: false });
+
+  // Tracks current time so staleness is recomputed every 30 s without a full status poll
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
   const [agentStates, setAgentStates] = useState<Record<string, AgentState>>({});
   const [supervisorDecisions, setSupervisorDecisions] = useState<SupervisorDecision[]>([]);
   const [guardrailsBySite, setGuardrailsBySite] = useState<Record<string, GuardrailResult[]>>({});
@@ -529,6 +536,38 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     ? appStatus.llmProviders.find((p) => p.id === appStatus.defaultLlmProviderId) ?? appStatus.llmProviders[0] ?? null
     : null;
 
+  // ── Staleness detection ────────────────────────────────────────────
+  // Warn when the system is marked active but the supervisor hasn't ticked
+  // recently. Threshold is 2.5× the default 10-minute supervisor interval.
+  // A 2-minute grace period is given right after startup (no lastRunAt yet).
+  const STALE_THRESHOLD_MS = 25 * 60 * 1000;
+  const STARTUP_GRACE_MS = 2 * 60 * 1000;
+
+  const isStalled = isActive && (() => {
+    if (supervisorStatus.lastRunAt) {
+      return (now - new Date(supervisorStatus.lastRunAt).getTime()) > STALE_THRESHOLD_MS;
+    }
+    if (startedAt) {
+      return (now - new Date(startedAt).getTime()) > STARTUP_GRACE_MS;
+    }
+    return false;
+  })();
+
+  const stalledMinutesAgo = supervisorStatus.lastRunAt
+    ? Math.round((now - new Date(supervisorStatus.lastRunAt).getTime()) / 60_000)
+    : null;
+
+  const handleRestart = async (agentIds: string[]) => {
+    setIsStopping(true);
+    try {
+      await fetch('/api/agents/stop', { method: 'POST' });
+      setIsActive(false);
+    } finally {
+      setIsStopping(false);
+    }
+    await handleStart(agentIds);
+  };
+
   // ── Derived stats ──────────────────────────────────────────────────
   const allViolations = Object.values(guardrailsBySite).flat();
   const activeAgents = Object.values(agentStates).filter((s) => s.isActive).length;
@@ -551,7 +590,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-              isActive ? 'bg-violet-600' : 'bg-slate-700'
+              isActive && isStalled ? 'bg-amber-600' : isActive ? 'bg-violet-600' : 'bg-slate-700'
             }`}>
               <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -562,7 +601,11 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               <h2 className="text-lg font-bold text-white">Autonomous Agent System</h2>
               <p className="text-xs text-slate-400">
                 {isActive
-                  ? `Active since ${startedAt ? new Date(startedAt).toLocaleTimeString() : '—'} · ${activeAgents} agent${activeAgents !== 1 ? 's' : ''} running`
+                  ? isStalled
+                    ? <span className="text-amber-400">⚠ Supervisor stalled{stalledMinutesAgo !== null ? ` · last run ${stalledMinutesAgo}m ago` : ''}</span>
+                    : activeAgents > 0
+                      ? `Active since ${startedAt ? new Date(startedAt).toLocaleTimeString() : '—'} · ${activeAgents} agent${activeAgents !== 1 ? 's' : ''} running`
+                      : `Active since ${startedAt ? new Date(startedAt).toLocaleTimeString() : '—'} · ${sites.length} agent${sites.length !== 1 ? 's' : ''} scheduled`
                   : 'Supervisor-driven, guardrail-validated event generation'}
               </p>
             </div>
@@ -615,7 +658,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               </button>
             )}
 
-            {isActive ? (
+            {isActive && !isStalled ? (
               <button
                 onClick={handleStop}
                 disabled={isStopping}
@@ -637,14 +680,14 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               </button>
             ) : (
               <button
-                onClick={openStartModal}
-                disabled={isStarting || sites.length === 0}
+                onClick={isStalled ? () => handleRestart(sites.map((s) => s.id)) : openStartModal}
+                disabled={isStarting || isStopping || sites.length === 0}
                 className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
               >
-                {isStarting ? (
+                {isStarting || isStopping ? (
                   <>
                     <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Starting…
+                    {isStopping ? 'Stopping…' : 'Starting…'}
                   </>
                 ) : (
                   <>
@@ -671,6 +714,23 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
+          </div>
+        )}
+
+        {/* Stalled supervisor warning */}
+        {isStalled && (
+          <div className="mt-3 flex items-start gap-2 bg-amber-900/20 border border-amber-800/50 rounded-lg px-3 py-2">
+            <svg className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <p className="text-sm text-amber-300">
+              <span className="font-medium">Agent supervisor appears stalled</span>
+              {' — '}
+              {stalledMinutesAgo !== null
+                ? `last run ${stalledMinutesAgo} minute${stalledMinutesAgo !== 1 ? 's' : ''} ago.`
+                : 'supervisor has not run since startup.'}
+              {' '}Click <span className="font-medium">Start Agents</span> to restart, or <span className="font-medium">Run Now</span> to trigger a manual tick.
+            </p>
           </div>
         )}
 
@@ -835,7 +895,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               <span>{site.icon}</span>
               <span>{site.name}</span>
               {state?.isActive && (
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-500/50" />
               )}
               {violations > 0 && (
                 <span className="text-[10px] bg-amber-900/50 text-amber-400 border border-amber-800 px-1 py-0.5 rounded-full">
@@ -916,6 +976,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                     state={agentState}
                     dailyTarget={dailyTarget}
                     personaCount={site.personaCount}
+                    systemActive={isActive && !isStalled}
                     algoliaApp={algoliaApp ? { name: algoliaApp.name, appId: algoliaApp.appId, isOverride: !!site.algoliaAppConfigId } : undefined}
                     llmProvider={llmProvider ? { name: llmProvider.name, model: llmProvider.defaultModel, isOverride: !!site.llmProviderId } : undefined}
                     onEdit={() => onEditSite(site.id)}
@@ -966,6 +1027,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                     state={state}
                     dailyTarget={dailyTarget}
                     personaCount={tabSite.personaCount}
+                    systemActive={isActive && !isStalled}
                     algoliaApp={algoliaApp ? { name: algoliaApp.name, appId: algoliaApp.appId, isOverride: !!tabSite.algoliaAppConfigId } : undefined}
                     llmProvider={llmProvider ? { name: llmProvider.name, model: llmProvider.defaultModel, isOverride: !!tabSite.llmProviderId } : undefined}
                     indices={tabSite.indices}
