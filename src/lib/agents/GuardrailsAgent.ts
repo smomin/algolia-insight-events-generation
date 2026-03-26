@@ -41,11 +41,16 @@ export class GuardrailsAgent {
 
     const configs = await getAgentConfigs().catch(() => null);
     const systemPrompt = configs?.guardrails?.systemPrompt ?? DEFAULT_GUARDRAILS_PROMPT;
+    const guardrailsProviderId = configs?.guardrails?.llmProviderId;
 
     try {
       const raw = await callLLM(
         [{ role: 'user', content: userMessage }],
-        { systemPrompt, maxTokens: 200 },
+        {
+          systemPrompt,
+          maxTokens: 200,
+          ...(guardrailsProviderId ? { providerIdOverride: guardrailsProviderId } : {}),
+        },
         agent.id
       );
 

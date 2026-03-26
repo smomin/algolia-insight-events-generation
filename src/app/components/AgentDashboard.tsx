@@ -72,6 +72,10 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
   const [isRunningNow, setIsRunningNow] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
+  // Start modal
+  const [showStartModal, setShowStartModal] = useState(false);
+  const [selectedAgentIds, setSelectedAgentIds] = useState<Set<string>>(new Set());
+
   // Agent config editing
   const [agentConfigs, setAgentConfigs] = useState<AgentConfigs | null>(null);
   const [editingAgent, setEditingAgent] = useState<keyof AgentConfigs | null>(null);
@@ -295,6 +299,26 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
     }
   };
 
+  const handleAgentLlmProviderChange = async (agentKey: 'supervisor' | 'guardrails', providerId: string) => {
+    if (!agentConfigs) return;
+    const updatedConfig = {
+      ...agentConfigs[agentKey],
+      llmProviderId: providerId || undefined,
+    };
+    setAgentConfigs((prev) => prev ? { ...prev, [agentKey]: updatedConfig } : prev);
+    try {
+      const res = await fetch('/api/agents/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [agentKey]: updatedConfig }),
+      });
+      if (res.ok) {
+        const saved: AgentConfigs = await res.json();
+        setAgentConfigs(saved);
+      }
+    } catch { /* ignore — optimistic update already applied */ }
+  };
+
   // Load guardrail violations for each site
   useEffect(() => {
     sites.forEach(async (site) => {
@@ -400,13 +424,25 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
   }
 
   // ── Actions ────────────────────────────────────────────────────────
-  const handleStart = async () => {
+  const openStartModal = () => {
+    setSelectedAgentIds(new Set(sites.map((s) => s.id)));
+    setStartError(null);
+    setShowStartModal(true);
+  };
+
+  const handleStart = async (agentIds: string[]) => {
+    setShowStartModal(false);
     setIsStarting(true);
     setStartError(null);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30_000);
     try {
-      const res = await fetch('/api/agents/start', { method: 'POST', signal: controller.signal });
+      const res = await fetch('/api/agents/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentIds }),
+        signal: controller.signal,
+      });
       if (res.ok || res.status === 409) {
         setIsActive(true);
       } else {
@@ -601,8 +637,8 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               </button>
             ) : (
               <button
-                onClick={handleStart}
-                disabled={isStarting}
+                onClick={openStartModal}
+                disabled={isStarting || sites.length === 0}
                 className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
               >
                 {isStarting ? (
@@ -641,10 +677,16 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
         {/* Agent system prompt cards */}
         <div className="mt-4 pt-4 border-t border-slate-700/50 grid grid-cols-1 sm:grid-cols-3 gap-3">
           {([
-            { key: 'supervisor' as const, accent: 'text-violet-400', border: 'border-violet-800/40', bg: 'bg-violet-900/10', num: '①', label: 'Supervisor Agent', badge: 'bg-violet-900/40 text-violet-300 border-violet-800' },
-            { key: 'workerAgent' as const, accent: 'text-blue-400', border: 'border-blue-800/40', bg: 'bg-blue-900/10', num: '②', label: 'Worker Agent', badge: 'bg-blue-900/40 text-blue-300 border-blue-800' },
-            { key: 'guardrails' as const, accent: 'text-amber-400', border: 'border-amber-800/40', bg: 'bg-amber-900/10', num: '③', label: 'Guardrails Agent', badge: 'bg-amber-900/40 text-amber-300 border-amber-800' },
-          ] as const).map(({ key, accent, border, bg, num, label, badge }) => (
+            { key: 'supervisor' as const, accent: 'text-violet-400', border: 'border-violet-800/40', bg: 'bg-violet-900/10', num: '①', label: 'Supervisor Agent', badge: 'bg-violet-900/40 text-violet-300 border-violet-800', hasLlmSelector: true },
+            { key: 'workerAgent' as const, accent: 'text-blue-400', border: 'border-blue-800/40', bg: 'bg-blue-900/10', num: '②', label: 'Worker Agent', badge: 'bg-blue-900/40 text-blue-300 border-blue-800', hasLlmSelector: false },
+            { key: 'guardrails' as const, accent: 'text-amber-400', border: 'border-amber-800/40', bg: 'bg-amber-900/10', num: '③', label: 'Guardrails Agent', badge: 'bg-amber-900/40 text-amber-300 border-amber-800', hasLlmSelector: true },
+          ] as const).map(({ key, accent, border, bg, num, label, badge, hasLlmSelector }) => {
+            const selectedProviderId = agentConfigs?.[key]?.llmProviderId;
+            const selectedProvider = selectedProviderId
+              ? appStatus?.llmProviders.find((p) => p.id === selectedProviderId)
+              : null;
+            const effectiveProvider = selectedProvider ?? defaultLLM;
+            return (
             <div key={key} className={`rounded-lg border ${border} ${bg} p-3 flex flex-col gap-2`}>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">
@@ -665,13 +707,50 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               <p className="text-[10px] text-slate-400 leading-relaxed line-clamp-3">
                 {agentConfigs ? agentConfigs[key].systemPrompt : '—'}
               </p>
+
+              {/* LLM provider selector — shown only for supervisor and guardrails */}
+              {hasLlmSelector && (
+                <div className="pt-1.5 border-t border-slate-700/40 space-y-1.5">
+                  {/* Display badge for the effective provider */}
+                  {effectiveProvider && (
+                    <div className="flex items-center gap-1">
+                      <svg className="w-2.5 h-2.5 text-violet-400/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                      <span className="text-[9px] text-violet-300 font-medium">{effectiveProvider.name}</span>
+                      <span className="text-[9px] text-slate-600">·</span>
+                      <span className="text-[9px] font-mono text-slate-500">{effectiveProvider.defaultModel}</span>
+                      {!selectedProviderId && (
+                        <span className="text-[8px] text-slate-600 italic ml-0.5">default</span>
+                      )}
+                      {selectedProviderId && (
+                        <span className="text-[8px] bg-violet-900/40 text-violet-400 border border-violet-800/60 px-1 py-px rounded ml-0.5">override</span>
+                      )}
+                    </div>
+                  )}
+                  {/* Dropdown to change provider */}
+                  <select
+                    value={selectedProviderId ?? ''}
+                    onChange={(e) => handleAgentLlmProviderChange(key as 'supervisor' | 'guardrails', e.target.value)}
+                    disabled={!appStatus?.llmProviders.length}
+                    className="w-full text-[10px] bg-slate-800/60 border border-slate-700/50 hover:border-slate-600 focus:border-violet-500 text-slate-400 rounded px-1.5 py-0.5 outline-none transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <option value="">App default{defaultLLM ? ` — ${defaultLLM.name}` : ''}</option>
+                    {(appStatus?.llmProviders ?? []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} · {p.defaultModel}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {agentConfigs?.[key].updatedAt && (
                 <p className="text-[9px] text-slate-600">
                   Updated {new Date(agentConfigs[key].updatedAt!).toLocaleDateString()}
                 </p>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {/* App settings row */}
@@ -975,6 +1054,143 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
             sessions={sessionsBySite[tabSite.id]}
             lastUpdated={sseLastUpdated[tabSite.id] ?? null}
           />
+        </div>
+      )}
+
+      {/* ── Start agents modal ─────────────────────────────────────── */}
+      {showStartModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md shadow-2xl flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <h3 className="text-sm font-semibold text-white">Start Agents</h3>
+              </div>
+              <button
+                onClick={() => setShowStartModal(false)}
+                className="text-slate-500 hover:text-white transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-xs text-slate-400">
+                Choose which site agents to run. The supervisor will generate events for the selected agents on its regular schedule.
+              </p>
+
+              {/* Select all / none */}
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-500 font-medium uppercase tracking-wide">Site Agents</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSelectedAgentIds(new Set(sites.map((s) => s.id)))}
+                    className="text-[10px] text-violet-400 hover:text-violet-300 transition-colors"
+                  >
+                    Select all
+                  </button>
+                  <span className="text-slate-700">·</span>
+                  <button
+                    onClick={() => setSelectedAgentIds(new Set())}
+                    className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
+                  >
+                    None
+                  </button>
+                </div>
+              </div>
+
+              {/* Agent list */}
+              <div className="space-y-1.5 max-h-64 overflow-y-auto pr-0.5">
+                {sites.map((site) => {
+                  const checked = selectedAgentIds.has(site.id);
+                  const hasPersonas = (personasBySite[site.id]?.length ?? site.personaCount) > 0;
+                  return (
+                    <button
+                      key={site.id}
+                      onClick={() => {
+                        setSelectedAgentIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(site.id)) next.delete(site.id);
+                          else next.add(site.id);
+                          return next;
+                        });
+                      }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors text-left ${
+                        checked
+                          ? 'bg-violet-900/20 border-violet-700/50'
+                          : 'bg-slate-800/50 border-slate-700/50 hover:border-slate-600'
+                      }`}
+                    >
+                      {/* Checkbox */}
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
+                        checked ? 'bg-violet-600 border-violet-500' : 'bg-slate-800 border-slate-600'
+                      }`}>
+                        {checked && (
+                          <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </div>
+
+                      {/* Icon + name */}
+                      <span className="text-base leading-none">{site.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-200 truncate">{site.name}</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          {hasPersonas
+                            ? `${personasBySite[site.id]?.length ?? site.personaCount} persona${(personasBySite[site.id]?.length ?? site.personaCount) !== 1 ? 's' : ''}`
+                            : <span className="text-amber-500/80">No personas configured</span>
+                          }
+                        </p>
+                      </div>
+
+                      {/* Active badge */}
+                      {agentStates[site.id]?.isActive && (
+                        <span className="text-[10px] bg-violet-900/50 text-violet-300 border border-violet-800 px-1.5 py-0.5 rounded-full shrink-0">
+                          active
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedAgentIds.size === 0 && (
+                <p className="text-[11px] text-amber-400/80 flex items-center gap-1.5">
+                  <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Select at least one agent to start
+                </p>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-slate-700">
+              <button
+                onClick={() => setShowStartModal(false)}
+                className="px-4 py-2 text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleStart(Array.from(selectedAgentIds))}
+                disabled={selectedAgentIds.size === 0}
+                className="px-4 py-2 text-sm bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Start {selectedAgentIds.size === sites.length ? 'All' : selectedAgentIds.size} Agent{selectedAgentIds.size !== 1 ? 's' : ''}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

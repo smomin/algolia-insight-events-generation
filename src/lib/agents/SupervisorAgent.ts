@@ -42,6 +42,7 @@ interface SupervisorState {
   startedAt?: string;
   lastRunAt?: string;
   recentDecisions: SupervisorDecision[];
+  activeAgentIds?: string[];
 }
 
 const g = globalThis as typeof globalThis & { _supervisorState?: SupervisorState };
@@ -125,7 +126,10 @@ function calcUrgency(
 async function supervisorTick(): Promise<void> {
   supervisorState.lastRunAt = new Date().toISOString();
 
-  const agents = await getAllAgents();
+  const allAgents = await getAllAgents();
+  const agents = supervisorState.activeAgentIds
+    ? allAgents.filter((a) => supervisorState.activeAgentIds!.includes(a.id))
+    : allAgents;
   const eventLimit = getEventLimit();
   const intervalMs = parseInt(
     process.env.AGENT_SUPERVISOR_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
@@ -243,11 +247,13 @@ async function supervisorTick(): Promise<void> {
 // Public lifecycle API
 // ─────────────────────────────────────────────
 
-export function startSupervisor(): void {
+export function startSupervisor(agentIds?: string[]): void {
   if (supervisorState.isRunning) {
     log.warn('startSupervisor called but supervisor is already running');
     return;
   }
+
+  supervisorState.activeAgentIds = agentIds;
 
   const intervalMs = parseInt(
     process.env.AGENT_SUPERVISOR_INTERVAL_MS ?? String(DEFAULT_INTERVAL_MS),
@@ -263,7 +269,12 @@ export function startSupervisor(): void {
   supervisorState.isRunning = true;
   supervisorState.startedAt = new Date().toISOString();
 
-  log.info('started', { intervalMinutes, cronExpr, startedAt: supervisorState.startedAt });
+  log.info('started', {
+    intervalMinutes,
+    cronExpr,
+    startedAt: supervisorState.startedAt,
+    activeAgentIds: agentIds ?? 'all',
+  });
   emitToAgent('_supervisor', 'supervisor', {
     type: 'started',
     timestamp: supervisorState.startedAt,
@@ -284,6 +295,7 @@ export function stopSupervisor(): void {
     supervisorState.task = null;
   }
   supervisorState.isRunning = false;
+  supervisorState.activeAgentIds = undefined;
   log.info('stopped');
   emitToAgent('_supervisor', 'supervisor', {
     type: 'stopped',

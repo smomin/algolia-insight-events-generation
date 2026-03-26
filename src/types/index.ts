@@ -389,6 +389,8 @@ export interface AgentSystemStatus {
 export interface AgentPromptConfig {
   systemPrompt: string;
   updatedAt?: string;
+  /** Optional LLM provider override for this agent role (supervisor / guardrails). */
+  llmProviderId?: string;
 }
 
 export interface AgentConfigs {

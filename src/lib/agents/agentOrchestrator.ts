@@ -40,17 +40,17 @@ const state = g._orchestratorState;
 // Public API
 // ─────────────────────────────────────────────
 
-export async function startAgentSystem(): Promise<void> {
+export async function startAgentSystem(agentIds?: string[]): Promise<void> {
   if (state.isActive) {
     log.warn('startAgentSystem called but system is already active');
     return;
   }
 
-  log.info('starting agent system');
+  log.info('starting agent system', { agentIds: agentIds ?? 'all' });
   state.isActive = true;
   state.startedAt = new Date().toISOString();
 
-  startSupervisor();
+  startSupervisor(agentIds);
   log.info('agent system started', { startedAt: state.startedAt });
 }
 
