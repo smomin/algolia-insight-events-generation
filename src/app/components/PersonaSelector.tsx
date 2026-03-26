@@ -222,7 +222,7 @@ export default function PersonaSelector({
       const res = await fetch('/api/run-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ personaId, siteId }),
+        body: JSON.stringify({ personaId, agentId: siteId }),
       });
       // Safely parse — server may return HTML on a crash
       const text = await res.text();
