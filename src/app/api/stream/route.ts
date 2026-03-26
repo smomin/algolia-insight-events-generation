@@ -1,5 +1,8 @@
 import { NextRequest } from 'next/server';
 import { subscribeToStream, subscribeToDevReload, emitDevReload, type SSEEventType } from '@/lib/sse';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('SSE');
 import {
   getTodayCounters,
   getEventLog,
@@ -50,12 +53,12 @@ export async function GET(req: NextRequest) {
   let unsubscribeReload: (() => void) | undefined;
   let heartbeatId: ReturnType<typeof setInterval> | undefined;
 
-  console.log(`[DEBUG:SSE] new connection — agentId="${agentId}" types=[${typesParam}] parsed=[${types.join(',')}]`);
+  log.debug(`new connection — agentId="${agentId}" types=[${typesParam}] parsed=[${types.join(',')}]`);
   if (!agentId) {
-    console.warn(`[DEBUG:SSE] agentId is empty — no initial snapshot will be sent and no live events will be received. Check that the client passes ?siteId= or ?agentId= in the SSE URL.`);
+    log.warn('agentId is empty — no initial snapshot will be sent. Check that the client passes ?siteId= or ?agentId= in the SSE URL.');
   }
   if (types.length === 0) {
-    console.warn(`[DEBUG:SSE] no valid types parsed from "${typesParam}" — valid types are: ${[...VALID_TYPES].join(', ')}`);
+    log.warn(`no valid types parsed from "${typesParam}" — valid types are: ${[...VALID_TYPES].join(', ')}`);
   }
 
   const stream = new ReadableStream({
@@ -163,22 +166,22 @@ export async function GET(req: NextRequest) {
             } catch { /* status unavailable */ }
           } else if (type === 'event-log') {
             try {
-              console.log(`[DEBUG:SSE] fetching initial event-log for agentId="${agentId}"`);
+              log.debug(`fetching initial event-log for agentId="${agentId}"`);
               const events = await getEventLog(agentId);
-              console.log(`[DEBUG:SSE] sending initial event-log: ${events.length} events for "${agentId}"`);
+              log.debug(`sending initial event-log: ${events.length} events for "${agentId}"`);
               send('event-log', { events, initial: true });
             } catch (err) {
-              console.error(`[DEBUG:SSE] event-log initial snapshot failed for "${agentId}":`, err);
+              log.error(`event-log initial snapshot failed for "${agentId}"`, err);
               send('event-log', { events: [], initial: true });
             }
           } else if (type === 'session') {
             try {
-              console.log(`[DEBUG:SSE] fetching initial sessions for agentId="${agentId}"`);
+              log.debug(`fetching initial sessions for agentId="${agentId}"`);
               const sessions = await getSessions(agentId);
-              console.log(`[DEBUG:SSE] sending initial sessions: ${sessions.length} records for "${agentId}"`);
+              log.debug(`sending initial sessions: ${sessions.length} records for "${agentId}"`);
               send('session', { sessions, initial: true });
             } catch (err) {
-              console.error(`[DEBUG:SSE] sessions initial snapshot failed for "${agentId}":`, err);
+              log.error(`sessions initial snapshot failed for "${agentId}"`, err);
               send('session', { sessions: [], initial: true });
             }
           } else if (type === 'counters') {

@@ -1,6 +1,9 @@
 'use client';
 
 import React, { useState, useCallback, useEffect } from 'react';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('SessionHistory');
 
 interface SessionRecord {
   id: string;
@@ -62,7 +65,7 @@ export default function SessionHistory({ agentId, isActive = false, sessions: se
   // auto-fetch via REST so the tab doesn't start empty.
   useEffect(() => {
     if (sessionsProp === undefined) {
-      console.debug(`[DEBUG:SessionHistory] no SSE data from parent for "${agentId}" — fetching via REST`);
+      log.debug(`no SSE data from parent for "${agentId}" — fetching via REST`);
       fetchSessions();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -70,22 +73,22 @@ export default function SessionHistory({ agentId, isActive = false, sessions: se
 
   const fetchSessions = useCallback(async () => {
     setLoading(true);
-    console.debug(`[DEBUG:SessionHistory] fetching /api/sessions?agentId=${agentId}&limit=50`);
+    log.debug(`fetching /api/sessions?agentId=${agentId}&limit=50`);
     try {
       const res = await fetch(`/api/sessions?agentId=${agentId}&limit=50`);
-      console.debug(`[DEBUG:SessionHistory] fetch response status=${res.status} ok=${res.ok}`);
+      log.debug(`fetch response status=${res.status} ok=${res.ok}`);
       if (res.ok) {
         const data = await res.json();
         const count = data.sessions?.length ?? 0;
-        console.debug(`[DEBUG:SessionHistory] fetched ${count} sessions`);
+        log.debug(`fetched ${count} sessions`);
         setSessionsLocal(data.sessions ?? []);
         setLocalLastUpdated(new Date());
       } else {
         const text = await res.text();
-        console.error(`[DEBUG:SessionHistory] fetch failed — HTTP ${res.status}:`, text);
+        log.error(`fetch failed — HTTP ${res.status}: ${text}`);
       }
     } catch (err) {
-      console.error(`[DEBUG:SessionHistory] fetch error:`, err);
+      log.error('fetch error', err);
     } finally {
       setLoading(false);
     }

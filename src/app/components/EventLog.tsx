@@ -2,6 +2,9 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import type { SentEvent, SessionRecord } from '@/types';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('EventLog');
 
 interface EventLogProps {
   agentId: string;
@@ -142,7 +145,7 @@ export default function EventLog({ agentId, events: eventsProp, sessions: sessio
   // auto-fetch via REST so the tab doesn't start empty.
   useEffect(() => {
     if (eventsProp === undefined) {
-      console.debug(`[DEBUG:EventLog] no SSE data from parent for "${agentId}" — fetching via REST`);
+      log.debug(`no SSE data from parent for "${agentId}" — fetching via REST`);
       fetchLog();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -186,32 +189,32 @@ export default function EventLog({ agentId, events: eventsProp, sessions: sessio
 
   const fetchLog = useCallback(async () => {
     setLoading(true);
-    console.debug(`[DEBUG:EventLog] fetching via REST for agentId="${agentId}"`);
+    log.debug(`fetching via REST for agentId="${agentId}"`);
     try {
       const [logRes, sessRes] = await Promise.all([
         fetch(`/api/event-log?agentId=${agentId}`),
         fetch(`/api/sessions?agentId=${agentId}&limit=200`),
       ]);
-      console.debug(`[DEBUG:EventLog] fetch results — event-log status=${logRes.status} sessions status=${sessRes.status}`);
+      log.debug(`fetch results — event-log status=${logRes.status} sessions status=${sessRes.status}`);
       if (logRes.ok) {
         const data = await logRes.json();
-        console.debug(`[DEBUG:EventLog] event-log fetched ${data.events?.length ?? 0} events`);
+        log.debug(`event-log fetched ${data.events?.length ?? 0} events`);
         setEventsLocal(data.events ?? []);
       } else {
         const text = await logRes.text();
-        console.error(`[DEBUG:EventLog] event-log fetch failed — HTTP ${logRes.status}:`, text);
+        log.error(`event-log fetch failed — HTTP ${logRes.status}: ${text}`);
       }
       if (sessRes.ok) {
         const data = await sessRes.json();
-        console.debug(`[DEBUG:EventLog] sessions fetched ${data.sessions?.length ?? 0} sessions`);
+        log.debug(`sessions fetched ${data.sessions?.length ?? 0} sessions`);
         setSessionsLocal(data.sessions ?? []);
       } else {
         const text = await sessRes.text();
-        console.error(`[DEBUG:EventLog] sessions fetch failed — HTTP ${sessRes.status}:`, text);
+        log.error(`sessions fetch failed — HTTP ${sessRes.status}: ${text}`);
       }
       setLocalLastUpdated(new Date());
     } catch (err) {
-      console.error(`[DEBUG:EventLog] fetch error:`, err);
+      log.error('fetch error', err);
     } finally {
       setLoading(false);
     }

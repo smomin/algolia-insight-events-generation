@@ -1,5 +1,8 @@
 import { cbGet, cbUpsert, cbDelete, cbGetIndex, cbAddToIndex, cbRemoveFromIndex } from '@/lib/couchbase';
 import { emitToAgent } from '@/lib/sse';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('DB');
 
 // Module-level constant so the env var is parsed once at startup.
 const DAILY_LIMIT = parseInt(process.env.DAILY_EVENT_LIMIT_PER_INDEX ?? '1000', 10);
@@ -113,14 +116,14 @@ export async function appendEventLog(
 }
 
 export async function getEventLog(agentId: string): Promise<SentEvent[]> {
-  console.debug(`[DB:getEventLog] querying collection=eventLogs key="${agentId}"`);
+  log.debug(`querying collection=eventLogs key="${agentId}"`);
   const doc = await cbGet<{ events: SentEvent[] }>('eventLogs', agentId);
   if (!doc) {
-    console.debug(`[DB:getEventLog] document not found for key="${agentId}" — returning []`);
+    log.debug(`document not found for key="${agentId}" — returning []`);
     return [];
   }
   const count = doc.events?.length ?? 0;
-  console.debug(`[DB:getEventLog] found ${count} events for key="${agentId}"`);
+  log.debug(`found ${count} events for key="${agentId}"`);
   return (doc.events ?? []).slice().reverse();
 }
 
@@ -169,14 +172,14 @@ export async function appendSession(
 }
 
 export async function getSessions(agentId: string): Promise<SessionRecord[]> {
-  console.debug(`[DB:getSessions] querying collection=sessions key="${agentId}"`);
+  log.debug(`querying collection=sessions key="${agentId}"`);
   const doc = await cbGet<{ sessions: SessionRecord[] }>('sessions', agentId);
   if (!doc) {
-    console.debug(`[DB:getSessions] document not found for key="${agentId}" — returning []`);
+    log.debug(`document not found for key="${agentId}" — returning []`);
     return [];
   }
   const count = doc.sessions?.length ?? 0;
-  console.debug(`[DB:getSessions] found ${count} sessions for key="${agentId}"`);
+  log.debug(`found ${count} sessions for key="${agentId}"`);
   return doc.sessions ?? [];
 }
 

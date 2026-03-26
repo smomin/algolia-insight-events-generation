@@ -1,25 +1,28 @@
 import { NextResponse } from 'next/server';
 import { getAgent, getPersonas, savePersonas } from '@/lib/agentConfigs';
+import { createLogger } from '@/lib/logger';
 import type { Persona } from '@/types';
+
+const log = createLogger('API/personas');
 
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, { params }: Ctx) {
   try {
     const { id } = await params;
-    console.log(`[DEBUG:API/personas] GET agentId="${id}" — calling getAgent`);
+    log.debug(`GET agentId="${id}" — calling getAgent`);
     const agent = await getAgent(id);
     if (!agent) {
-      console.warn(`[DEBUG:API/personas] agent "${id}" not found`);
+      log.warn(`agent "${id}" not found`);
       return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
-    console.log(`[DEBUG:API/personas] agent found, calling getPersonas for "${id}"`);
+    log.debug(`agent found, calling getPersonas for "${id}"`);
     const personas = await getPersonas(agent);
-    console.log(`[DEBUG:API/personas] returning ${personas.length} personas for "${id}"`);
+    log.debug(`returning ${personas.length} personas for "${id}"`);
     return NextResponse.json({ personas, agentId: id });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[DEBUG:API/personas] ERROR for "${(await params).id}":`, err);
+    log.error(`GET failed for "${(await params).id}"`, err);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

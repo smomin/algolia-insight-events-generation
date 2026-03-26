@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useCallback, useState } from 'react';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('useSSE');
 
 type SSEHandler = (eventType: string, data: unknown) => void;
 
@@ -42,14 +45,15 @@ export function useSSE(
   useEffect(() => {
     if (!url) return;
 
-    console.debug(`[DEBUG:useSSE] opening EventSource url="${url}" types=[${typesKey}]`);
+    log.debug(`opening EventSource url="${url}" types=[${typesKey}]`);
     const es = new EventSource(url);
 
     es.onopen = () => {
-      console.debug(`[DEBUG:useSSE] connection OPEN url="${url}"`);
+      log.debug(`connection OPEN url="${url}"`);
     };
     es.onerror = (evt) => {
-      console.warn(`[DEBUG:useSSE] connection ERROR url="${url}" readyState=${es.readyState}`, evt);
+      log.warn(`connection ERROR url="${url}" readyState=${es.readyState}`);
+      void evt;
     };
 
     const listeners: Array<{ type: string; fn: (e: MessageEvent) => void }> = [];
@@ -57,7 +61,7 @@ export function useSSE(
     // App event listeners
     for (const type of eventTypes) {
       const fn = (event: MessageEvent) => {
-        console.debug(`[DEBUG:useSSE] received event type="${type}" url="${url}"`);
+        log.debug(`received event type="${type}" url="${url}"`);
         try {
           handlerRef.current(type, JSON.parse(event.data as string));
         } catch {
@@ -72,14 +76,14 @@ export function useSSE(
     // We close the current EventSource and open a new one so the stream route
     // resends its initial state snapshot with the latest server-side data.
     const reloadFn = () => {
-      console.debug(`[DEBUG:useSSE] reload event received — reconnecting url="${url}"`);
+      log.debug(`reload event received — reconnecting url="${url}"`);
       es.close();
       forceReconnect();
     };
     es.addEventListener('reload', reloadFn);
 
     return () => {
-      console.debug(`[DEBUG:useSSE] closing EventSource url="${url}"`);
+      log.debug(`closing EventSource url="${url}"`);
       for (const { type, fn } of listeners) {
         es.removeEventListener(type, fn);
       }

@@ -1,5 +1,5 @@
 /**
- * Structured logger utility.
+ * Structured logger utility — works in both Node (server) and browser (client).
  *
  * Usage:
  *   import { createLogger } from '@/lib/logger';
@@ -7,11 +7,14 @@
  *   log.info('Something happened', { key: 'value' });
  *   log.error('Failed', err);
  *
- * Log level is controlled via the LOG_LEVEL environment variable:
- *   LOG_LEVEL=debug   → debug + info + warn + error
- *   LOG_LEVEL=info    → info + warn + error  (default)
- *   LOG_LEVEL=warn    → warn + error
- *   LOG_LEVEL=error   → error only
+ * Log level is controlled via environment variables:
+ *   Server: LOG_LEVEL=debug|info|warn|error  (default: info)
+ *   Client: NEXT_PUBLIC_LOG_LEVEL=debug|info|warn|error  (default: info)
+ *
+ *   debug  → debug + info + warn + error
+ *   info   → info + warn + error
+ *   warn   → warn + error
+ *   error  → error only
  */
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -22,6 +25,12 @@ const LEVEL_RANK: Record<LogLevel, number> = {
   warn: 2,
   error: 3,
 };
+
+// ─────────────────────────────────────────────
+// Environment detection
+// ─────────────────────────────────────────────
+
+const isBrowser = typeof window !== 'undefined';
 
 // ─────────────────────────────────────────────
 // ANSI colour helpers (server/Node only)
@@ -48,12 +57,15 @@ function levelTag(level: LogLevel): string {
 // ─────────────────────────────────────────────
 
 // Cache the resolved level so process.env is not read on every log call.
-// LOG_LEVEL is expected to be set at startup and not change at runtime.
+// LOG_LEVEL / NEXT_PUBLIC_LOG_LEVEL is expected to be set at startup.
 let _minLevel: number | undefined;
 
 function getMinLevel(): number {
   if (_minLevel !== undefined) return _minLevel;
-  const env = (process.env.LOG_LEVEL ?? 'info').toLowerCase() as LogLevel;
+  const raw = isBrowser
+    ? (process.env.NEXT_PUBLIC_LOG_LEVEL ?? 'info')
+    : (process.env.LOG_LEVEL ?? 'info');
+  const env = raw.toLowerCase() as LogLevel;
   _minLevel = LEVEL_RANK[env] ?? LEVEL_RANK.info;
   return _minLevel;
 }
@@ -61,24 +73,39 @@ function getMinLevel(): number {
 function serializeMeta(meta: unknown): string {
   if (meta === undefined || meta === null) return '';
   if (meta instanceof Error) {
-    return ` ${C.dim}${meta.message}${C.reset}`;
+    return isBrowser ? '' : ` ${C.dim}${meta.message}${C.reset}`;
   }
   try {
     const str = JSON.stringify(meta);
-    return ` ${C.dim}${str}${C.reset}`;
+    return isBrowser ? ` ${str}` : ` ${C.dim}${str}${C.reset}`;
   } catch {
-    return ` ${C.dim}${String(meta)}${C.reset}`;
+    return isBrowser ? ` ${String(meta)}` : ` ${C.dim}${String(meta)}${C.reset}`;
   }
 }
 
 function write(level: LogLevel, namespace: string, msg: string, meta?: unknown): void {
   if (LEVEL_RANK[level] < getMinLevel()) return;
 
+  const metaStr = meta !== undefined ? serializeMeta(meta) : '';
+
+  if (isBrowser) {
+    const prefix = `[${namespace}]`;
+    const line = `${prefix} ${msg}${metaStr}`;
+    if (level === 'error') {
+      console.error(line, ...(meta instanceof Error ? [meta] : []));
+    } else if (level === 'warn') {
+      console.warn(line);
+    } else if (level === 'debug') {
+      console.debug(line);
+    } else {
+      console.info(line);
+    }
+    return;
+  }
+
   const ts = `${C.dim}${new Date().toISOString()}${C.reset}`;
   const lvl = levelTag(level);
   const ns = `${C.ns}[${namespace}]${C.reset}`;
-  const metaStr = meta !== undefined ? serializeMeta(meta) : '';
-
   const line = `${ts} ${lvl} ${ns} ${msg}${metaStr}`;
 
   if (level === 'error') {
