@@ -5,8 +5,6 @@ import React, { useState, useCallback, useEffect } from 'react';
 interface SessionRecord {
   id: string;
   agentId?: string;
-  /** @deprecated use agentId */
-  siteId?: string;
   personaId: string;
   personaName: string;
   startedAt: string;

@@ -399,7 +399,7 @@ export async function getAppConfigStatus(): Promise<AppConfigStatus> {
 }
 
 /** Encrypt agent credentials before saving to AgentConfig. */
-export function encryptSiteCredentials(
+export function encryptAgentCredentials(
   creds: CredentialFields
 ): CredentialFields {
   const filtered: CredentialFields = {};

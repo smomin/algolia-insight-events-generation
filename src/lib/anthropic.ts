@@ -5,6 +5,11 @@ import { createLogger } from './logger';
 
 const log = createLogger('Anthropic');
 
+function generateNumericToken(): string {
+  // Generate a 38-digit numeric user token — large enough to be globally unique per persona/site
+  return Array.from({ length: 38 }, () => Math.floor(Math.random() * 10)).join('');
+}
+
 // ─────────────────────────────────────────────
 // Generic functions — driven by site prompts
 // ─────────────────────────────────────────────
@@ -235,7 +240,7 @@ You will be given information about a site and sample records from its Algolia s
 Return ONLY a valid JSON array. No markdown, no code fences, no explanation. Each persona object must have exactly these fields:
 - "id": unique kebab-case slug (e.g. "budget-conscious-traveler-1")
 - "name": realistic full name
-- "userToken": "gen-" followed by a unique 8-char alphanumeric string
+- "userToken": a unique 38-digit numeric string (e.g. "47209780137068115507257169452385809809") — digits only, no letters or dashes
 - "description": 1-2 sentence personality and usage description (specific to the content)
 - "skill": one of "beginner", "intermediate", "advanced"
 - "budget": one of "low", "medium", "high"
@@ -265,6 +270,6 @@ ${indexContext || 'No sample records available — generate plausible personas b
   return parsed.map((p, i) => ({
     ...p,
     id: p.id || `generated-persona-${Date.now()}-${i}`,
-    userToken: p.userToken || `gen-${Math.random().toString(36).slice(2, 10)}`,
+    userToken: /^\d{10,}$/.test(p.userToken ?? '') ? p.userToken : generateNumericToken(),
   }));
 }

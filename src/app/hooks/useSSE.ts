@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 
 type SSEHandler = (eventType: string, data: unknown) => void;
 
@@ -25,16 +25,18 @@ export function useSSE(
   const handlerRef = useRef<SSEHandler>(handler);
   handlerRef.current = handler;
 
-  // Incrementing this counter forces the effect to re-run, closing the old
-  // EventSource and opening a new one with a fresh initial state snapshot.
-  const reconnectRef = useRef(0);
+  // useState (not useRef) so that incrementing this counter triggers a
+  // re-render, which causes the useEffect below to re-run and open a fresh
+  // EventSource. Using a ref here would not work because ref mutations do not
+  // trigger re-renders, so the effect would never re-execute.
+  const [reconnectCount, setReconnectCount] = useState(0);
 
   // Build a stable key from the types array so the effect only re-runs when
   // the list of event types actually changes (not just a new array reference).
   const typesKey = [...eventTypes].sort().join(',');
 
   const forceReconnect = useCallback(() => {
-    reconnectRef.current += 1;
+    setReconnectCount((c) => c + 1);
   }, []);
 
   useEffect(() => {
@@ -47,7 +49,7 @@ export function useSSE(
       console.debug(`[DEBUG:useSSE] connection OPEN url="${url}"`);
     };
     es.onerror = (evt) => {
-      console.error(`[DEBUG:useSSE] connection ERROR url="${url}" readyState=${es.readyState}`, evt);
+      console.warn(`[DEBUG:useSSE] connection ERROR url="${url}" readyState=${es.readyState}`, evt);
     };
 
     const listeners: Array<{ type: string; fn: (e: MessageEvent) => void }> = [];
@@ -84,8 +86,5 @@ export function useSSE(
       es.removeEventListener('reload', reloadFn);
       es.close();
     };
-    // reconnectRef.current is intentionally included so a forceReconnect() call
-    // re-runs this effect and opens a fresh EventSource.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, typesKey, reconnectRef.current]);
+  }, [url, typesKey, reconnectCount, forceReconnect]);
 }

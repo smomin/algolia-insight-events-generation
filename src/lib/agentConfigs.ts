@@ -28,15 +28,9 @@ export async function getAllAgents(): Promise<AgentConfig[]> {
   });
 }
 
-/** @deprecated Use getAllAgents */
-export const getAllSites = getAllAgents;
-
 export async function getAgent(id: string): Promise<AgentConfig | null> {
   return getAgentConfig(id);
 }
-
-/** @deprecated Use getAgent */
-export const getSite = getAgent;
 
 export async function createAgent(
   config: Omit<AgentConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'>,
@@ -55,9 +49,6 @@ export async function createAgent(
 
   return full;
 }
-
-/** @deprecated Use createAgent */
-export const createSite = createAgent;
 
 export async function updateAgent(
   id: string,
@@ -83,18 +74,12 @@ export async function updateAgent(
   return updated;
 }
 
-/** @deprecated Use updateAgent */
-export const updateSite = updateAgent;
-
 export async function removeAgent(id: string): Promise<boolean> {
   const cfg = await getAgentConfig(id);
   if (!cfg) return false;
   await deleteAgentConfig(id);
   return true;
 }
-
-/** @deprecated Use removeAgent */
-export const removeSite = removeAgent;
 
 // ─────────────────────────────────────────────
 // Personas — stored in `personas` collection

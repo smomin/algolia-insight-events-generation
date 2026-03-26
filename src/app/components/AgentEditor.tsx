@@ -90,7 +90,7 @@ interface AppConfigStatus {
   defaultAlgoliaAppId?: string;
 }
 
-interface SiteForm {
+interface AgentForm {
   id: string;
   name: string;
   icon: string;
@@ -100,8 +100,8 @@ interface SiteForm {
   promptSelect: string;
   promptSecondary: string;
   indices: IndexForm[];
-  llmProviderId: string;      // '' = use app default
-  algoliaAppConfigId: string; // '' = use app default
+  llmProviderId: string;
+  algoliaAppConfigId: string;
 }
 
 function uid() {
@@ -129,19 +129,19 @@ function makeIndexForm(role: 'primary' | 'secondary' = 'secondary'): IndexForm {
   };
 }
 
-function siteToForm(site: AgentConfig): SiteForm {
+function agentToForm(agent: AgentConfig): AgentForm {
   return {
-    id: site.id,
-    name: site.name,
-    icon: site.icon,
-    color: site.color,
-    siteUrl: site.siteUrl ?? '',
-    promptPrimary: site.claudePrompts.generatePrimaryQuery,
-    promptSelect: site.claudePrompts.selectBestResult,
-    promptSecondary: site.claudePrompts.generateSecondaryQueries,
-    llmProviderId: site.llmProviderId ?? '',
-    algoliaAppConfigId: site.algoliaAppConfigId ?? '',
-    indices: site.indices.map((idx) => ({
+    id: agent.id,
+    name: agent.name,
+    icon: agent.icon,
+    color: agent.color,
+    siteUrl: agent.siteUrl ?? '',
+    promptPrimary: agent.claudePrompts.generatePrimaryQuery,
+    promptSelect: agent.claudePrompts.selectBestResult,
+    promptSecondary: agent.claudePrompts.generateSecondaryQueries,
+    llmProviderId: agent.llmProviderId ?? '',
+    algoliaAppConfigId: agent.algoliaAppConfigId ?? '',
+    indices: agent.indices.map((idx) => ({
       _key: uid(),
       id: idx.id,
       label: idx.label,
@@ -157,7 +157,7 @@ function siteToForm(site: AgentConfig): SiteForm {
   };
 }
 
-function formToSite(form: SiteForm): Omit<AgentConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'> {
+function formToAgent(form: AgentForm): Omit<AgentConfig, 'isBuiltIn' | 'createdAt' | 'updatedAt'> {
   return {
     id: form.id.trim().toLowerCase().replace(/\s+/g, '_'),
     name: form.name.trim(),
@@ -191,10 +191,10 @@ function formToSite(form: SiteForm): Omit<AgentConfig, 'isBuiltIn' | 'createdAt'
 // Props
 // ─────────────────────────────────────────────
 
-interface SiteEditorProps {
-  siteId?: string;              // undefined = create mode
-  initialSite?: AgentConfig;    // pre-loaded agent data — skips the fetch when provided
-  appConfig?: AppConfigStatus;  // pre-loaded app config — skips the /api/app-config fetch
+interface AgentEditorProps {
+  agentId?: string;
+  initialAgent?: AgentConfig;
+  appConfig?: AppConfigStatus;
   onSaved: (agent: AgentConfig) => void;
   onClose: () => void;
 }
@@ -389,8 +389,8 @@ const TYPE_ICONS: Record<LLMProviderType, string> = {
   ollama: '🦙',
 };
 
-export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, onClose }: SiteEditorProps) {
-  const isCreate = !siteId;
+export default function AgentEditor({ agentId, initialAgent, appConfig, onSaved, onClose }: AgentEditorProps) {
+  const isCreate = !agentId;
 
   const [showLLM, setShowLLM] = useState(false);
   const [showAlgoliaConfig, setShowAlgoliaConfig] = useState(false);
@@ -407,8 +407,8 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
     () => appConfig?.defaultAlgoliaAppId ?? ''
   );
 
-  const [form, setForm] = useState<SiteForm>(() => {
-    if (initialSite) return siteToForm(initialSite);
+  const [form, setForm] = useState<AgentForm>(() => {
+    if (initialAgent) return agentToForm(initialAgent);
     return {
       id: '',
       name: '',
@@ -437,15 +437,13 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
     };
   });
 
-  // Only show a loading state when we need to fetch (no initialSite provided in edit mode)
-  const [loading, setLoading] = useState(!isCreate && !initialSite);
+  const [loading, setLoading] = useState(!isCreate && !initialAgent);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showPrompts, setShowPrompts] = useState(false);
   const [showIconPicker, setShowIconPicker] = useState(false);
 
   useEffect(() => {
-    // Skip fetch if the parent already passed app config
     if (appConfig) return;
     fetch('/api/app-config')
       .then((r) => r.json())
@@ -467,17 +465,16 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
   }, [appConfig]);
 
   useEffect(() => {
-    // Skip fetch if we already have the data from the parent
-    if (!siteId || initialSite) return;
-    fetch(`/api/agent-configs/${siteId}`)
+    if (!agentId || initialAgent) return;
+    fetch(`/api/agent-configs/${agentId}`)
       .then((r) => r.json())
       .then((data) => {
-        if (data.agent) setForm(siteToForm(data.agent as AgentConfig));
+        if (data.agent) setForm(agentToForm(data.agent as AgentConfig));
         else setError(data.error ?? 'Failed to load agent');
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Network error'))
       .finally(() => setLoading(false));
-  }, [siteId, initialSite]);
+  }, [agentId, initialAgent]);
 
   const addIndex = useCallback(() => {
     setForm((f) => ({
@@ -501,8 +498,8 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
   }, []);
 
   const validate = (): string | null => {
-    if (!form.name.trim()) return 'Site name is required';
-    if (isCreate && !form.id.trim()) return 'Site ID is required';
+    if (!form.name.trim()) return 'Agent name is required';
+    if (isCreate && !form.id.trim()) return 'Agent ID is required';
     if (form.indices.length === 0) return 'At least one index is required';
     if (!form.indices.some((i) => i.role === 'primary')) return 'At least one index must be Primary';
     for (const idx of form.indices) {
@@ -519,7 +516,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
     setSaving(true);
 
     try {
-      const payload = formToSite(form);
+      const payload = formToAgent(form);
       let res: Response;
 
       if (isCreate) {
@@ -529,7 +526,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
           body: JSON.stringify(payload),
         });
       } else {
-        res = await fetch(`/api/agent-configs/${siteId}`, {
+        res = await fetch(`/api/agent-configs/${agentId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -568,12 +565,12 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
         <div className={`px-5 py-4 border-b border-gray-700 flex items-center justify-between`}>
           <div>
             <h2 className="text-base font-semibold text-white">
-              {isCreate ? 'Create Site' : `Edit Site`}
+              {isCreate ? 'Create Agent' : 'Edit Agent'}
             </h2>
             <p className="text-xs text-gray-400 mt-0.5">
               {isCreate
-                ? 'Configure a new site with custom indices and Algolia events'
-                : 'Update indices, event names, and Claude prompts'}
+                ? 'Configure a new agent with custom indices and Algolia events'
+                : 'Update indices, event names, and LLM prompts'}
             </p>
           </div>
           <button
@@ -597,7 +594,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="col-span-2">
-                    <label className="block text-xs text-gray-400 mb-1">Site Name <span className="text-rose-400">*</span></label>
+                    <label className="block text-xs text-gray-400 mb-1">Agent Name <span className="text-rose-400">*</span></label>
                     <input
                       value={form.name}
                       onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -678,7 +675,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
                   <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
                     Indices <span className="text-gray-600 font-normal normal-case tracking-normal">({form.indices.length})</span>
                   </h3>
-                  <p className="text-[10px] text-gray-600">First primary index is searched first by Claude</p>
+                  <p className="text-[10px] text-gray-600">First primary index is searched first by the agent</p>
                 </div>
 
                 <div className="space-y-2">
@@ -705,7 +702,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
                 </button>
               </section>
 
-              {/* ── Claude Prompts (collapsible) ── */}
+              {/* ── LLM Prompts (collapsible) ── */}
               <section>
                 <button
                   onClick={() => setShowPrompts((v) => !v)}
@@ -717,7 +714,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
                   </svg>
-                  Claude Prompts
+                  LLM Prompts
                   <span className="text-gray-600 font-normal normal-case tracking-normal">(advanced)</span>
                 </button>
 
@@ -767,7 +764,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
                 {showLLM && (
                   <div className="mt-3 space-y-3">
                     <p className="text-[11px] text-gray-500 bg-gray-800 rounded-lg p-2.5">
-                      Select a specific LLM provider and model for this site. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
+                      Select a specific LLM provider and model for this agent. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
                     </p>
 
                     <div>
@@ -834,7 +831,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
                 {showAlgoliaConfig && (
                   <div className="mt-3 space-y-3">
                     <p className="text-[11px] text-gray-500 bg-gray-800 rounded-lg p-2.5">
-                      Select a specific Algolia application for this site. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
+                      Select a specific Algolia application for this agent. Leave on &ldquo;App Default&rdquo; to use whatever is configured globally in App Settings.
                     </p>
 
                     <div>
@@ -907,7 +904,7 @@ export default function SiteEditor({ siteId, initialSite, appConfig, onSaved, on
                 Saving…
               </>
             ) : (
-              isCreate ? 'Create Site' : 'Save Changes'
+              isCreate ? 'Create Agent' : 'Save Changes'
             )}
           </button>
         </div>

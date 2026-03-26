@@ -7,7 +7,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const personaId = body.personaId as string | undefined;
-    const agentId = (body.agentId as string | undefined) ?? (body.siteId as string | undefined) ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const agentId = (body.agentId as string | undefined) ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
 
     const agent = await getAgent(agentId);
     if (!agent) {

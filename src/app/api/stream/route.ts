@@ -69,39 +69,47 @@ export async function GET(req: NextRequest) {
         }
       };
 
+      // Send an immediate comment line so the browser receives bytes right away
+      // and the EventSource transitions to OPEN state before the (potentially
+      // slow) initial DB snapshot runs. Without this, long-running DB queries
+      // can cause the browser to timeout the connection while still connecting.
+      controller.enqueue(encoder.encode(': connected\n\n'));
+
       // ── Initial snapshot ──────────────────────────────────────────────
       // Each DB call is individually guarded so a slow/unavailable collection
       // cannot block the rest of the snapshot or the SSE connection itself.
 
       // Multi-agent combined stream: one connection covers all agents.
       // Events are tagged with agentId so the client can route them.
+      // All per-agent fetches run in parallel to avoid the O(n) sequential
+      // Couchbase round-trips that caused 57-second connection delays.
       if (agentId === '_agents') {
         const aidList = (searchParams.get('agentIds') ?? '').split(',').filter(Boolean);
-        for (const aid of aidList) {
+        await Promise.all(aidList.map(async (aid) => {
           if (types.includes('agent-status')) {
             send('agent-status', { ...getAgentState(aid), agentId: aid });
           }
-          if (types.includes('guardrail')) {
-            const violations = await getGuardrailViolations(aid).catch(() => []);
+          const [violations, sessions, events] = await Promise.all([
+            types.includes('guardrail')
+              ? getGuardrailViolations(aid).catch(() => [])
+              : Promise.resolve(null),
+            types.includes('session')
+              ? getSessions(aid).catch(() => [])
+              : Promise.resolve(null),
+            types.includes('event-log')
+              ? getEventLog(aid).catch(() => [])
+              : Promise.resolve(null),
+          ]);
+          if (violations !== null) {
             send('guardrail', { agentId: aid, violations, initial: true });
           }
-          if (types.includes('session')) {
-            try {
-              const sessions = await getSessions(aid);
-              send('session', { agentId: aid, sessions, initial: true });
-            } catch {
-              send('session', { agentId: aid, sessions: [], initial: true });
-            }
+          if (sessions !== null) {
+            send('session', { agentId: aid, sessions, initial: true });
           }
-          if (types.includes('event-log')) {
-            try {
-              const events = await getEventLog(aid);
-              send('event-log', { agentId: aid, events, initial: true });
-            } catch {
-              send('event-log', { agentId: aid, events: [], initial: true });
-            }
+          if (events !== null) {
+            send('event-log', { agentId: aid, events, initial: true });
           }
-        }
+        }));
       } else if (agentId === '_global') {
         try {
           const agents = await getAllAgents();

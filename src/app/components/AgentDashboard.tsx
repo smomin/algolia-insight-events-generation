@@ -981,7 +981,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
 
           {/* Supervisor decisions for this agent */}
           <SupervisorLog
-            decisions={supervisorDecisions.filter((d) => (d.agentId ?? d.siteId) === tabSite.id)}
+            decisions={supervisorDecisions.filter((d) => d.agentId === tabSite.id)}
             isRunning={supervisorStatus.isRunning}
             lastRunAt={supervisorStatus.lastRunAt}
           />
@@ -1082,12 +1082,12 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
             {/* Body */}
             <div className="px-5 py-4 space-y-3">
               <p className="text-xs text-slate-400">
-                Choose which site agents to run. The supervisor will generate events for the selected agents on its regular schedule.
+                Choose which agents to run. The supervisor will generate events for the selected agents on its regular schedule.
               </p>
 
               {/* Select all / none */}
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-slate-500 font-medium uppercase tracking-wide">Site Agents</span>
+                <span className="text-[11px] text-slate-500 font-medium uppercase tracking-wide">Agents</span>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setSelectedAgentIds(new Set(sites.map((s) => s.id)))}
@@ -1209,7 +1209,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                   <span className="text-slate-300">
                     {editingAgent === 'supervisor' ? 'Supervisor Agent'
                       : editingAgent === 'guardrails' ? 'Guardrails Agent'
-                      : 'Site Agent'}
+                      : 'Worker Agent'}
                   </span>
                 </h3>
               </div>
@@ -1230,7 +1230,7 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
                 {editingAgent === 'guardrails' &&
                   'This system prompt is sent to the LLM on every guardrail validation call. It determines how strictly queries are evaluated against persona profiles.'}
                 {editingAgent === 'workerAgent' &&
-                  "This prompt describes the Worker Agent's overarching behavior. It is stored as context; per-agent query prompts are configured in the agent settings."}
+                  "This prompt describes the Worker Agent's overarching behavior. It is stored as context; per-agent query prompts are configured in each agent's settings."}
               </p>
             </div>
 

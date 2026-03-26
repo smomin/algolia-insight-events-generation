@@ -74,9 +74,6 @@ Your role is to:
 
 Always stay in character as the persona. Generate queries that a real person with this profile would naturally type into a search box. Prefer specific, natural language over generic terms.`;
 
-/** @deprecated Use DEFAULT_WORKER_AGENT_PROMPT */
-export const DEFAULT_SITE_AGENT_PROMPT = DEFAULT_WORKER_AGENT_PROMPT;
-
 export const DEFAULT_PRIMARY_INDEX_AGENT_PROMPT = `You are a Primary Index Search Agent responsible for generating realistic, persona-driven discovery queries for the primary catalog.
 
 Your role is to simulate the initial search intent of a user arriving at the site — the first thing they type into the search bar during a browsing session.
@@ -115,8 +112,7 @@ export async function getAgentConfigs(): Promise<AgentConfigs> {
   return {
     supervisor: doc.supervisor ?? DEFAULT_AGENT_CONFIGS.supervisor,
     guardrails: doc.guardrails ?? DEFAULT_AGENT_CONFIGS.guardrails,
-    // Support legacy `siteAgent` key stored in DB
-    workerAgent: doc.workerAgent ?? doc.siteAgent ?? DEFAULT_AGENT_CONFIGS.workerAgent,
+    workerAgent: doc.workerAgent ?? DEFAULT_AGENT_CONFIGS.workerAgent,
     primaryIndexAgent: doc.primaryIndexAgent ?? DEFAULT_AGENT_CONFIGS.primaryIndexAgent,
     secondaryIndexAgent: doc.secondaryIndexAgent ?? DEFAULT_AGENT_CONFIGS.secondaryIndexAgent,
   };

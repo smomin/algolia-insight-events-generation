@@ -4,7 +4,7 @@ import { getEventLog, clearEventLog } from '@/lib/db';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const agentId = searchParams.get('agentId') ?? searchParams.get('siteId') ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const agentId = searchParams.get('agentId') ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
     console.log(`[DEBUG:API/event-log] GET agentId="${agentId}" — calling getEventLog`);
     const log = await getEventLog(agentId);
     console.log(`[DEBUG:API/event-log] returning ${log.length} events for "${agentId}"`);
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const agentId = searchParams.get('agentId') ?? searchParams.get('siteId') ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const agentId = searchParams.get('agentId') ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
     await clearEventLog(agentId);
     return NextResponse.json({ cleared: true, agentId });
   } catch (err) {

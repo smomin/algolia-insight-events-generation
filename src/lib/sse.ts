@@ -34,9 +34,6 @@ export function emitToAgent(
   }
 }
 
-/** @deprecated Use emitToAgent */
-export const emitToSite = emitToAgent;
-
 /**
  * Subscribe to SSE events for an agent channel.
  * Pass '_global' as agentId to receive cross-agent status updates.

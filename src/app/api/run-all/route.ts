@@ -5,7 +5,7 @@ import { getAgent, getPersonas, getAllAgents } from '@/lib/agentConfigs';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const agentId = (body.agentId as string | undefined) ?? (body.siteId as string | undefined);
+    const agentId = body.agentId as string | undefined;
 
     if (agentId) {
       const agent = await getAgent(agentId);

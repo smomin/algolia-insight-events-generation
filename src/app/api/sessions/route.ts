@@ -4,7 +4,7 @@ import { getSessions, clearSessions } from '@/lib/db';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const agentId = searchParams.get('agentId') ?? searchParams.get('siteId') ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const agentId = searchParams.get('agentId') ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
     const limit = parseInt(searchParams.get('limit') ?? '50', 10);
     console.log(`[DEBUG:API/sessions] GET agentId="${agentId}" limit=${limit} — calling getSessions`);
     const all = await getSessions(agentId);
@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const agentId = searchParams.get('agentId') ?? searchParams.get('siteId') ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const agentId = searchParams.get('agentId') ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
     await clearSessions(agentId);
     return NextResponse.json({ cleared: true, agentId });
   } catch (err) {

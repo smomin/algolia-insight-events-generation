@@ -81,9 +81,6 @@ export function getAgentState(agentId: string): AgentState {
   return getOrCreateState(agentId);
 }
 
-/** @deprecated Use getAgentState */
-export const getAgentStateForSite = getAgentState;
-
 export function getAllAgentStates(): Record<string, AgentState> {
   return Object.fromEntries(agentStates.entries());
 }
@@ -568,6 +565,3 @@ export class WorkerAgent {
 // Singleton — shared, stateless per call; state is in the agentStates Map above
 if (!gAgent._workerAgent) gAgent._workerAgent = new WorkerAgent();
 export const workerAgent = gAgent._workerAgent;
-
-/** @deprecated Use workerAgent */
-export const siteAgent = workerAgent;

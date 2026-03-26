@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import AppConfigPanel from './components/AppConfigPanel';
 import AgentDashboard from './components/AgentDashboard';
-import SiteEditor from './components/SiteEditor';
+import AgentEditor from './components/AgentEditor';
 import type { AgentConfig, Persona } from '@/types';
 
 // Agent as returned by /api/agent-configs (includes personaCount + full personas array)
@@ -41,7 +41,7 @@ interface AppStatus {
 }
 
 export default function Home() {
-  const [sites, setSites] = useState<AgentListItem[]>([]);
+  const [agents, setAgents] = useState<AgentListItem[]>([]);
   const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
 
   // Editor state: undefined = closed, null = create mode, string = edit agentId
@@ -53,19 +53,19 @@ export default function Home() {
   const [isDeleting, setIsDeleting] = useState(false);
 
   // ── Load agent list ──
-  const loadSites = useCallback(async () => {
+  const loadAgents = useCallback(async () => {
     try {
       const res = await fetch('/api/agent-configs');
       if (!res.ok) return;
       const data = await res.json();
       const list: AgentListItem[] = data.agents ?? data.sites ?? [];
-      setSites(list);
+      setAgents(list);
     } catch {
       // ignore
     }
   }, []);
 
-  useEffect(() => { loadSites(); }, [loadSites]);
+  useEffect(() => { loadAgents(); }, [loadAgents]);
 
   // ── Load app config status ──
   useEffect(() => {
@@ -77,8 +77,8 @@ export default function Home() {
       .catch(() => {});
   }, []);
 
-  const handleDeleteSite = (id: string) => {
-    const agent = sites.find((s) => s.id === id);
+  const handleDeleteAgent = (id: string) => {
+    const agent = agents.find((a) => a.id === id);
     setPendingDelete({ id, name: agent?.name ?? id });
   };
 
@@ -87,7 +87,7 @@ export default function Home() {
     setIsDeleting(true);
     try {
       await fetch(`/api/agent-configs/${pendingDelete.id}`, { method: 'DELETE' });
-      await loadSites();
+      await loadAgents();
     } finally {
       setIsDeleting(false);
       setPendingDelete(null);
@@ -136,13 +136,13 @@ export default function Home() {
 
       <main className="max-w-screen-2xl mx-auto px-6 py-6 space-y-5">
         <AgentDashboard
-          sites={sites}
+          sites={agents}
           eventLimit={eventLimit}
           appStatus={appStatus}
           onOpenSettings={() => setAppConfigOpen(true)}
           onCreateSite={() => setEditorTarget(null)}
-          onEditSite={(siteId) => setEditorTarget(siteId)}
-          onDeleteSite={handleDeleteSite}
+          onEditSite={(agentId) => setEditorTarget(agentId)}
+          onDeleteSite={handleDeleteAgent}
         />
       </main>
 
@@ -161,11 +161,11 @@ export default function Home() {
         />
       )}
 
-      {/* ── Site Editor (create / edit) ── */}
+      {/* ── Agent Editor (create / edit) ── */}
       {editorTarget !== undefined && (
-        <SiteEditor
-          siteId={editorTarget ?? undefined}
-          initialSite={editorTarget ? sites.find((s) => s.id === editorTarget) : undefined}
+        <AgentEditor
+          agentId={editorTarget ?? undefined}
+          initialAgent={editorTarget ? agents.find((a) => a.id === editorTarget) : undefined}
           appConfig={appStatus ? {
             llmProviders: appStatus.llmProviders,
             defaultLlmProviderId: appStatus.defaultLlmProviderId,
@@ -174,7 +174,7 @@ export default function Home() {
           } : undefined}
           onSaved={async () => {
             setEditorTarget(undefined);
-            await loadSites();
+            await loadAgents();
           }}
           onClose={() => setEditorTarget(undefined)}
         />
@@ -227,10 +227,10 @@ export default function Home() {
       {/* ── Footer ── */}
       <footer className="border-t border-slate-800 mt-10 py-4">
         <div className="max-w-screen-2xl mx-auto px-6 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
-          <span>Algolia Insights Event Generator</span>
+          <span>Algolia Insights Agent Dashboard</span>
           <span>
-            {sites.length} agents ·{' '}
-            {sites.reduce((s, i) => s + i.personaCount, 0)} total personas
+            {agents.length} agents ·{' '}
+            {agents.reduce((s, a) => s + a.personaCount, 0)} total personas
           </span>
         </div>
       </footer>

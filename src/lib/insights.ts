@@ -193,8 +193,6 @@ export function toSentEvents(
   status: number,
   meta?: {
     agentId?: string;
-    /** @deprecated Use agentId */
-    siteId?: string;
     personaId?: string;
     personaName?: string;
     sessionId?: string;

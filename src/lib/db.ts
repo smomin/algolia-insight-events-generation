@@ -37,15 +37,9 @@ export async function getAllAgentConfigs(): Promise<Record<string, AgentConfig>>
   );
 }
 
-/** @deprecated Use getAllAgentConfigs */
-export const getAllSiteConfigs = getAllAgentConfigs;
-
 export async function getAgentConfig(id: string): Promise<AgentConfig | null> {
   return cbGet<AgentConfig>('siteConfigs', id);
 }
-
-/** @deprecated Use getAgentConfig */
-export const getSiteConfig = getAgentConfig;
 
 export async function saveAgentConfig(config: AgentConfig): Promise<void> {
   await cbUpsert('siteConfigs', config.id, {
@@ -55,16 +49,10 @@ export async function saveAgentConfig(config: AgentConfig): Promise<void> {
   await cbAddToIndex('siteConfigs', config.id);
 }
 
-/** @deprecated Use saveAgentConfig */
-export const saveSiteConfig = saveAgentConfig;
-
 export async function deleteAgentConfig(id: string): Promise<void> {
   await cbDelete('siteConfigs', id);
   await cbRemoveFromIndex('siteConfigs', id);
 }
-
-/** @deprecated Use deleteAgentConfig */
-export const deleteSiteConfig = deleteAgentConfig;
 
 // ─────────────────────────────────────────────
 // Counters (N-index, per agent)

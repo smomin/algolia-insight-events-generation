@@ -577,5 +577,3 @@ export function getNextRunTimeForAgent(agentId: string): string | null {
   return getNextRunTime();
 }
 
-/** @deprecated Use getNextRunTimeForAgent */
-export const getNextRunTimeForSite = getNextRunTimeForAgent;

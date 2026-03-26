@@ -5,7 +5,7 @@ import { getAllAgents } from '@/lib/agentConfigs';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const agentId = (body.agentId as string | undefined) ?? (body.siteId as string | undefined);
+    const agentId = body.agentId as string | undefined;
     const stopAll = body.stopAll === true;
 
     if (stopAll) {
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     }
 
     const cancelOnly = body.cancelOnly === true;
-    const id = agentId ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const id = agentId ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
 
     if (!cancelOnly) stopScheduler(id);
     await cancelDistribution(id);

@@ -41,9 +41,6 @@ export default function SessionCard({ session }: SessionCardProps) {
             <p className="text-xs text-slate-500">
               {new Date(session.timestamp).toLocaleTimeString()} ·{' '}
               {session.personaName ?? session.personaId}
-              {session.siteId && (
-                <span className="ml-2 text-slate-600">· {session.siteId}</span>
-              )}
             </p>
           </div>
         </div>

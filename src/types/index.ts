@@ -80,9 +80,6 @@ export interface AppConfig extends CredentialFields {
 /** Per-agent credential overrides — override global app config or env vars. */
 export type AgentCredentials = CredentialFields;
 
-/** @deprecated Use AgentCredentials */
-export type SiteCredentials = AgentCredentials;
-
 /** Full agent definition — stored in DB, editable via UI */
 export interface AgentConfig {
   id: string;
@@ -104,9 +101,6 @@ export interface AgentConfig {
   updatedAt: string;
 }
 
-/** @deprecated Use AgentConfig */
-export type SiteConfig = AgentConfig;
-
 // ─────────────────────────────────────────────
 // Persona — generic across all agents
 // ─────────────────────────────────────────────
@@ -117,8 +111,6 @@ export interface PersonaBase {
   userToken: string;
   description: string;
   agentId?: string;
-  /** @deprecated Use agentId */
-  site?: string;
   skill?: 'beginner' | 'intermediate' | 'advanced';
   budget?: 'low' | 'medium' | 'high';
   tags?: string[];
@@ -178,8 +170,6 @@ export interface SentEvent {
   batchStatus: number;
   sentAt: number;
   agentId?: string;
-  /** @deprecated Use agentId */
-  siteId?: string;
   personaId?: string;
   personaName?: string;
   sessionId?: string;
@@ -215,8 +205,6 @@ export interface SessionResult {
 export interface SessionRecord {
   id: string;
   agentId: string;
-  /** @deprecated Use agentId */
-  siteId?: string;
   personaId: string;
   personaName: string;
   startedAt: string;
@@ -234,8 +222,6 @@ export interface SessionRecord {
 export interface SchedulerRun {
   id: string;
   agentId: string;
-  /** @deprecated Use agentId */
-  siteId?: string;
   startedAt: string;
   completedAt?: string;
   sessionsPlanned: number;
@@ -254,9 +240,6 @@ export interface AgentCounters {
   byIndex: Record<string, number>; // FlexIndex.id → count today
 }
 
-/** @deprecated Use AgentCounters */
-export type SiteCounters = AgentCounters;
-
 // ─────────────────────────────────────────────
 // DB schema
 // ─────────────────────────────────────────────
@@ -267,9 +250,6 @@ export interface AgentData {
   schedulerRuns: SchedulerRun[];
   sessions: SessionRecord[];
 }
-
-/** @deprecated Use AgentData */
-export type SiteData = AgentData;
 
 export interface DbSchema {
   agentConfigs: Record<string, AgentConfig>; // all agent definitions
@@ -282,8 +262,6 @@ export interface DbSchema {
 
 export interface AgentSchedulerStatus {
   agentId: string;
-  /** @deprecated Use agentId */
-  siteId?: string;
   isRunning: boolean;
   isDistributing: boolean;
   nextRun: string | null;
@@ -293,13 +271,8 @@ export interface AgentSchedulerStatus {
   currentRun: SchedulerRun | null;
 }
 
-/** @deprecated Use AgentSchedulerStatus */
-export type SiteSchedulerStatus = AgentSchedulerStatus;
-
 export interface AllSchedulerStatus {
   agents: Record<string, AgentSchedulerStatus>;
-  /** @deprecated Use agents */
-  sites?: Record<string, AgentSchedulerStatus>;
 }
 
 // ─────────────────────────────────────────────
@@ -317,8 +290,6 @@ export type AgentPhase =
 
 export interface AgentState {
   agentId: string;
-  /** @deprecated Use agentId */
-  siteId?: string;
   phase: AgentPhase;
   currentPersonaId?: string;
   currentPersonaName?: string;
@@ -338,8 +309,6 @@ export interface GuardrailResult {
   reason: string;
   suggestedQuery?: string;
   agentId: string;
-  /** @deprecated Use agentId */
-  siteId?: string;
   personaId: string;
   personaName: string;
   originalQuery: string;
@@ -355,10 +324,6 @@ export interface SupervisorDecision {
   timestamp: string;
   agentId: string;
   agentName: string;
-  /** @deprecated Use agentId */
-  siteId?: string;
-  /** @deprecated Use agentName */
-  siteName?: string;
   urgency: SupervisorUrgency;
   sessionsDispatched: number;
   reasoning: string;
@@ -401,6 +366,4 @@ export interface AgentConfigs {
   primaryIndexAgent: AgentPromptConfig;
   /** System prompt for secondary index agents (extends journey from primary result context). */
   secondaryIndexAgent: AgentPromptConfig;
-  /** @deprecated Use workerAgent */
-  siteAgent?: AgentPromptConfig;
 }

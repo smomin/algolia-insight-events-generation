@@ -10,7 +10,7 @@ import { getAgent, getPersonas, getAllAgents } from '@/lib/agentConfigs';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const agentId = (body.agentId as string | undefined) ?? (body.siteId as string | undefined);
+    const agentId = body.agentId as string | undefined;
     const runNow = body.runNow === true;
     const startAll = body.startAll === true;
 
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const id = agentId ?? process.env.DEFAULT_SITE_ID ?? 'grocery';
+    const id = agentId ?? process.env.DEFAULT_AGENT_ID ?? 'grocery';
     const agent = await getAgent(id);
     if (!agent) {
       return NextResponse.json({ error: `Agent "${id}" not found` }, { status: 404 });
