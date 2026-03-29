@@ -213,6 +213,9 @@ export interface SessionRecord {
   eventsByIndex: Record<string, number>; // FlexIndex.id → event count
   success: boolean;
   error?: string;
+  primaryQuery?: string;        // the Algolia search query used for the primary index
+  secondaryQueries?: string[];  // queries used for each secondary index, in order
+  failurePhase?: string;        // phase at which the session failed (search | build | send)
 }
 
 // ─────────────────────────────────────────────

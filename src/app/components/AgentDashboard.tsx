@@ -880,7 +880,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
           Overview
         </button>
         {sites.map((site) => {
-          const violations = guardrailsBySite[site.id]?.length ?? 0;
           const state = agentStates[site.id];
           return (
             <button
@@ -896,11 +895,6 @@ export default function AgentDashboard({ sites, eventLimit, appStatus, onOpenSet
               <span>{site.name}</span>
               {state?.isActive && (
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-500/50" />
-              )}
-              {violations > 0 && (
-                <span className="text-[10px] bg-amber-900/50 text-amber-400 border border-amber-800 px-1 py-0.5 rounded-full">
-                  {violations}
-                </span>
               )}
             </button>
           );

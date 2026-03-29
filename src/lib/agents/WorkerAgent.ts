@@ -103,6 +103,12 @@ function generateSessionId(): string {
 // Session recording
 // ─────────────────────────────────────────────
 
+interface SessionQueryContext {
+  primaryQuery?: string;
+  secondaryQueries?: string[];
+  failurePhase?: string;
+}
+
 async function recordSession(
   agentId: string,
   sessionId: string,
@@ -110,7 +116,8 @@ async function recordSession(
   startedAt: string,
   eventsByIndex: Record<string, number>,
   success: boolean,
-  error?: string
+  error?: string,
+  queryContext?: SessionQueryContext
 ): Promise<void> {
   await appendSession(agentId, {
     id: sessionId,
@@ -123,6 +130,9 @@ async function recordSession(
     eventsByIndex,
     success,
     error,
+    primaryQuery: queryContext?.primaryQuery,
+    secondaryQueries: queryContext?.secondaryQueries,
+    failurePhase: queryContext?.failurePhase,
   });
 }
 
@@ -262,7 +272,10 @@ export class WorkerAgent {
       if (!primaryHits.length || !primaryQueryID) {
         const err = `No results for "${primaryQuery}" in "${primaryIndex.indexName}"`;
         sessionLog.warn(err);
-        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err);
+        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err, {
+          primaryQuery,
+          failurePhase: 'search',
+        });
         setPhase(agent.id, 'error', {
           errors: [...getOrCreateState(agent.id).errors.slice(-9), err],
         });
@@ -315,6 +328,9 @@ export class WorkerAgent {
         { index: FlexIndex; events: ReturnType<typeof buildFlexIndexEvents> }
       > = {};
 
+      // Collect the leading query used per secondary index for session logging
+      const collectedSecondaryQueries: string[] = [];
+
       for (const secIndexAgent of secondaryIndexAgents) {
         const secIdx = secondaryIndices.find((s) => s.id === secIndexAgent.indexId)!;
 
@@ -348,6 +364,7 @@ export class WorkerAgent {
               secQueries = [secValidation.suggestedQuery, ...secQueries.slice(1)];
             }
           }
+          collectedSecondaryQueries.push(secQueries[0]);
         }
 
         // Search the secondary index with all generated queries
@@ -404,7 +421,11 @@ export class WorkerAgent {
 
       if (allEvents.length === 0) {
         const err = 'No events built — verify index event configuration';
-        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err);
+        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err, {
+          primaryQuery,
+          secondaryQueries: collectedSecondaryQueries,
+          failurePhase: 'build',
+        });
         setPhase(agent.id, 'error', {
           errors: [...getOrCreateState(agent.id).errors.slice(-9), err],
         });
@@ -435,7 +456,10 @@ export class WorkerAgent {
           sessionId,
         };
         await appendEventLog(agent.id, toSentEvents(allEvents, httpStatus, sentMeta));
-        await recordSession(agent.id, sessionId, persona, startedAt, eventsByIndex, true);
+        await recordSession(agent.id, sessionId, persona, startedAt, eventsByIndex, true, undefined, {
+          primaryQuery,
+          secondaryQueries: collectedSecondaryQueries,
+        });
 
         const counters = await getTodayCounters(agent.id);
         const totalToday = Object.values(counters.byIndex).reduce((s, n) => s + n, 0);
@@ -457,7 +481,11 @@ export class WorkerAgent {
       } else {
         const err = `Insights API returned HTTP ${httpStatus}`;
         sessionLog.error(err, { sessionId, httpStatus });
-        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err);
+        await recordSession(agent.id, sessionId, persona, startedAt, {}, false, err, {
+          primaryQuery,
+          secondaryQueries: collectedSecondaryQueries,
+          failurePhase: 'send',
+        });
         setPhase(agent.id, 'error', {
           errors: [...getOrCreateState(agent.id).errors.slice(-9), err],
         });
@@ -546,7 +574,7 @@ export class WorkerAgent {
       await sleep(randomInt(400, 1200));
     }
 
-    setPhase(agent.id, 'idle', { isActive: false });
+    setPhase(agent.id, 'idle', { isActive: false, errors: [] });
     batchLog.info('batch complete', {
       sessionsCompleted: results.sessionsCompleted,
       sessionsRequested: sessionCount,

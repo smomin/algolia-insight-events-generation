@@ -304,8 +304,8 @@ export default function AgentStatusCard({
       )}
 
       {/* Stats row */}
-      <div className="flex items-center gap-3 text-[10px] text-slate-500">
-        {state.guardrailViolations > 0 && (
+      {state.guardrailViolations > 0 && (
+        <div className="flex items-center gap-3 text-[10px] text-slate-500">
           <span className="flex items-center gap-1 text-amber-500">
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -313,22 +313,7 @@ export default function AgentStatusCard({
             </svg>
             {state.guardrailViolations} guardrail {state.guardrailViolations === 1 ? 'hit' : 'hits'}
           </span>
-        )}
-        {state.errors.length > 0 && (
-          <span className="flex items-center gap-1 text-rose-500">
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-            {state.errors.length} {state.errors.length === 1 ? 'error' : 'errors'}
-          </span>
-        )}
-      </div>
-
-      {/* Latest error */}
-      {state.errors.length > 0 && (
-        <p className="text-[10px] text-rose-400/80 bg-rose-900/20 border border-rose-900/40 rounded px-2 py-1 line-clamp-2">
-          {state.errors[state.errors.length - 1]}
-        </p>
+        </div>
       )}
 
       {/* Expanded: sessions completed stat */}

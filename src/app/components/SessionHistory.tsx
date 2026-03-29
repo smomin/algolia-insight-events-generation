@@ -16,6 +16,9 @@ interface SessionRecord {
   eventsByIndex: Record<string, number>;
   success: boolean;
   error?: string;
+  primaryQuery?: string;
+  secondaryQueries?: string[];
+  failurePhase?: string;
 }
 
 interface SessionHistoryProps {
@@ -224,87 +227,131 @@ export default function SessionHistory({ agentId, isActive = false, sessions: se
             <p className="text-slate-600 text-xs">Start the agent or run a persona manually to see history</p>
           </div>
         ) : (
-          <table className="w-full text-left">
-            <thead className="sticky top-0 bg-slate-800/95 border-b border-slate-700">
-              <tr>
-                {['Time', 'Persona', ...allIndexIds, 'Total', 'Duration', 'Status'].map((h) => (
-                  <th
-                    key={h}
-                    className="px-3 py-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap"
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sessionsByDate.map(({ date, sessions: dateSessions }) => (
-                <React.Fragment key={`date-${date}`}>
-                  <tr>
-                    <td colSpan={4 + allIndexIds.length} className="px-3 py-1.5 bg-slate-900/30">
-                      <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{date}</span>
-                    </td>
-                  </tr>
-                  {dateSessions.map((session) => (
-                    <React.Fragment key={session.id}>
-                      <tr
-                        className="border-b border-slate-700/40 hover:bg-slate-700/30 transition-colors cursor-pointer"
-                        onClick={() => setExpandedId((p) => p === session.id ? null : session.id)}
-                      >
-                        <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
-                          {formatTime(session.startedAt)}
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="text-xs font-medium text-slate-200">{session.personaName}</div>
-                          <div className="text-[10px] text-slate-600 truncate max-w-[120px]">{session.personaId}</div>
-                        </td>
-                        {allIndexIds.map((id, i) => (
-                          <td key={id} className={`px-3 py-2 text-xs font-semibold tabular-nums ${i === 0 ? 'text-blue-400' : 'text-purple-400'}`}>
-                            {session.eventsByIndex?.[id] ?? 0}
+            <table className="w-full text-left">
+              <thead className="sticky top-0 bg-slate-800/95 border-b border-slate-700">
+                <tr>
+                  {['Time', 'Persona', 'Query', ...allIndexIds, 'Total', 'Duration', 'Status'].map((h) => (
+                    <th
+                      key={h}
+                      className="px-3 py-2 text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sessionsByDate.map(({ date, sessions: dateSessions }) => (
+                  <React.Fragment key={`date-${date}`}>
+                    <tr>
+                      <td colSpan={5 + allIndexIds.length} className="px-3 py-1.5 bg-slate-900/30">
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">{date}</span>
+                      </td>
+                    </tr>
+                    {dateSessions.map((session) => (
+                      <React.Fragment key={session.id}>
+                        <tr
+                          className="border-b border-slate-700/40 hover:bg-slate-700/30 transition-colors cursor-pointer"
+                          onClick={() => setExpandedId((p) => p === session.id ? null : session.id)}
+                        >
+                          <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
+                            {formatTime(session.startedAt)}
                           </td>
-                        ))}
-                        <td className="px-3 py-2 text-xs text-emerald-400 font-semibold tabular-nums">
-                          {session.totalEventsCount}
-                        </td>
-                        <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap tabular-nums">
-                          {formatDuration(session.startedAt, session.completedAt)}
-                        </td>
-                        <td className="px-3 py-2">
-                          {session.success ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                              </svg>
-                              OK
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-full">
-                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                              ERR
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                      {expandedId === session.id && session.error && (
-                        <tr key={`${session.id}-error`} className="border-b border-slate-700/40 bg-rose-900/10">
-                          <td colSpan={4 + allIndexIds.length} className="px-4 py-2">
-                            <div className="flex items-start gap-2">
-                              <svg className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                              </svg>
-                              <p className="text-xs text-rose-300 leading-snug">{session.error}</p>
-                            </div>
+                          <td className="px-3 py-2">
+                            <div className="text-xs font-medium text-slate-200">{session.personaName}</div>
+                            <div className="text-[10px] text-slate-600 truncate max-w-[120px]">{session.personaId}</div>
+                          </td>
+                          <td className="px-3 py-2 max-w-[200px]">
+                            {session.primaryQuery ? (
+                              <span className="text-[11px] text-slate-300 italic line-clamp-1" title={session.primaryQuery}>
+                                &ldquo;{session.primaryQuery}&rdquo;
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-600">—</span>
+                            )}
+                          </td>
+                          {allIndexIds.map((id, i) => (
+                            <td key={id} className={`px-3 py-2 text-xs font-semibold tabular-nums ${i === 0 ? 'text-blue-400' : 'text-purple-400'}`}>
+                              {session.eventsByIndex?.[id] ?? 0}
+                            </td>
+                          ))}
+                          <td className="px-3 py-2 text-xs text-emerald-400 font-semibold tabular-nums">
+                            {session.totalEventsCount}
+                          </td>
+                          <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap tabular-nums">
+                            {formatDuration(session.startedAt, session.completedAt)}
+                          </td>
+                          <td className="px-3 py-2">
+                            {session.success ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                                </svg>
+                                OK
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-full">
+                                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                                ERR
+                              </span>
+                            )}
                           </td>
                         </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
+                        {expandedId === session.id && (session.error || session.secondaryQueries?.length) && (
+                          <tr key={`${session.id}-detail`} className={`border-b border-slate-700/40 ${session.error ? 'bg-rose-900/10' : 'bg-slate-900/30'}`}>
+                            <td colSpan={5 + allIndexIds.length} className="px-4 py-2.5 space-y-2">
+                              {session.primaryQuery && (
+                                <div className="flex items-start gap-2">
+                                  <svg className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                  </svg>
+                                  <div>
+                                    <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-0.5">Primary query</p>
+                                    <p className="text-xs text-slate-300 italic">&ldquo;{session.primaryQuery}&rdquo;</p>
+                                  </div>
+                                </div>
+                              )}
+                              {session.secondaryQueries && session.secondaryQueries.length > 0 && (
+                                <div className="flex items-start gap-2">
+                                  <svg className="w-3.5 h-3.5 text-purple-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                  </svg>
+                                  <div>
+                                    <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-0.5">Secondary {session.secondaryQueries.length === 1 ? 'query' : 'queries'}</p>
+                                    <div className="flex flex-wrap gap-1">
+                                      {session.secondaryQueries.map((q, i) => (
+                                        <span key={i} className="text-xs text-purple-300 italic bg-purple-900/20 border border-purple-800/40 rounded px-1.5 py-0.5">
+                                          &ldquo;{q}&rdquo;
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                              {session.error && (
+                                <div className="flex items-start gap-2">
+                                  <svg className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  <div>
+                                    <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-0.5">
+                                      Error{session.failurePhase ? ` · ${session.failurePhase} phase` : ''}
+                                    </p>
+                                    <p className="text-xs text-rose-300 leading-snug">{session.error}</p>
+                                  </div>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
         )}
       </div>}
     </div>
